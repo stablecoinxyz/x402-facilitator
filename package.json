@@ -1,7 +1,8 @@
 {
-  "name": "facilitator",
+  "name": "x402-facilitator",
   "version": "1.0.0",
-  "description": "SBC x402 Facilitator - Verify and Settle Payments",
+  "author": "Stable Coin Inc.",
+  "description": "SBC x402 Facilitator - Verify and Settle Payments using the x402 protocol",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",

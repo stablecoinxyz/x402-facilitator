@@ -17,7 +17,7 @@ This implementation supports **v1** of the x402 protocol.
 
 ### Quick Demo (Base Sepolia)
 
-We have provided a complete demo environment that runs on Base Sepolia using the actual **SBC Token**.
+We have provided a complete demo environment that runs on Base Sepolia using [SBC](https://sepolia.basescan.org/address/0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16).
 
 1.  **Setup the environment:**
     This script will generate EVM wallets for Client, Merchant, and Facilitator.
