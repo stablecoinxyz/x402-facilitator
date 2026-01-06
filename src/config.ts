@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
+import path from 'path';
 
-dotenv.config({ path: '../../.env' });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 export const config = {
   port: parseInt(process.env.FACILITATOR_PORT || '3001'),
