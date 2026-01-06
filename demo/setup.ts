@@ -97,7 +97,7 @@ async function setup() {
     console.log('   Please fund the Client wallet with Base Sepolia ETH.');
     console.log(`   Address: ${client.address}`);
     console.log('   Faucets:');
-    console.log('   - https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet');
+    console.log('   - https://portal.cdp.coinbase.com/products/faucet');
     console.log('   - https://faucets.chain.link/base-sepolia');
     console.log('   - https://www.alchemy.com/faucets/base-sepolia');
     console.log('\n   Once funded, run "npm run setup" again.');
