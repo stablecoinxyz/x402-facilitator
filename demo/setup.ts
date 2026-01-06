@@ -92,7 +92,7 @@ async function setup() {
   
   console.log(`\n💰 Client Balance: ${ethBalance} ETH`);
 
-  if (balance < parseEther('0.01')) {
+  if (balance < parseEther('0.002')) {
     console.log('\n⚠️  INSUFFICIENT FUNDS');
     console.log('   Please fund the Client wallet with Base Sepolia ETH.');
     console.log(`   Address: ${client.address}`);
