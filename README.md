@@ -2,6 +2,8 @@
 
 SBC x402 Facilitator - Verify and Settle Payments.
 
+This implementation supports **v1** of the x402 protocol.
+
 ## Installation
 
 1. Clone the repository.
