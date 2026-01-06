@@ -15,12 +15,14 @@ This implementation supports **v1** of the x402 protocol.
 
 ## Usage
 
-### Quick Demo (Devnet)
+### Quick Demo (Base Sepolia)
 
-We have provided a complete demo environment that runs on Solana Devnet.
+We have provided a complete demo environment that runs on Base Sepolia.
 
 1.  **Setup the environment:**
-    This script will generate wallets, airdrop Devnet SOL, create a test token, fund the client wallet, and generate the `.env` file.
+    This script will generate EVM wallets for Client, Merchant, and Facilitator.
+    It will check for ETH balance. **If you have no funds, it will pause and provide faucet links.**
+    Once funded, it will wrap ETH to WETH (to simulate an ERC20 token) and approve the Facilitator to spend it.
     ```bash
     npm run setup
     ```
@@ -36,9 +38,9 @@ We have provided a complete demo environment that runs on Solana Devnet.
     ```
 
     The demo client sends a payment request to the facilitator. The facilitator then:
-    1.  Verifies the signature and balance.
-    2.  Executes the settlement (transfers tokens from Client to Merchant).
-    3.  Returns the transaction hash (viewable on Solana Explorer).
+    1.  Verifies the EIP-712 signature and WETH balance.
+    2.  Executes the settlement (transfers WETH from Client to Merchant using `transferFrom`).
+    3.  Returns the transaction hash (viewable on BaseScan).
 
 ### Configuration
 

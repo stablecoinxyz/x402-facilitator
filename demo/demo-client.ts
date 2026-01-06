@@ -1,51 +1,83 @@
-import nacl from 'tweetnacl';
-import bs58 from 'bs58';
-import { loadOrGenerateKeypair, DATA_DIR } from './utils';
+import { createWalletClient, http, parseEther, defineChain, verifyTypedData } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { baseSepolia } from 'viem/chains';
+import { getAccount, loadOrGenerateKey, DATA_DIR } from './utils';
 import fs from 'fs';
 import path from 'path';
 
 async function runDemo() {
-  console.log('🚀 Starting x402 Facilitator Demo Client');
-  console.log('========================================');
+  console.log('🚀 Starting x402 Facilitator Demo Client (Base Sepolia)');
+  console.log('=====================================================');
 
   // 0. Load Configuration
-  if (!fs.existsSync(path.join(DATA_DIR, 'client.json'))) {
+  if (!fs.existsSync(path.join(DATA_DIR, 'client.key'))) {
       console.error('❌ Client wallet not found. Please run "npm run setup" first.');
       process.exit(1);
   }
 
-  const client = loadOrGenerateKeypair('client');
-  const merchant = loadOrGenerateKeypair('merchant');
+  const client = getAccount('client');
+  const merchant = getAccount('merchant');
   
-  // Read .env to find port (optional, defaults to 3001)
+  // Read .env to find port
   const port = 3001;
   const facilitatorUrl = `http://localhost:${port}`;
 
-  console.log(`🔑 Client Wallet: ${client.publicKey.toBase58()}`);
-  console.log(`🏪 Merchant Wallet: ${merchant.publicKey.toBase58()}`);
+  console.log(`🔑 Client Wallet: ${client.address}`);
+  console.log(`🏪 Merchant Wallet: ${merchant.address}`);
 
   // 1. Define payment details
-  const amount = '50000000'; // 0.05 SBC (9 decimals)
-  const nonce = Date.now().toString();
-  const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+  const amount = parseEther('0.001').toString(); // 0.001 ETH/WETH
+  const nonce = BigInt(Date.now()).toString();
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600).toString(); // 1 hour from now
 
-  // 2. Construct the message to sign
-  const messageStr = `from:${client.publicKey.toBase58()}|to:${merchant.publicKey.toBase58()}|amount:${amount}|nonce:${nonce}|deadline:${deadline}`;
-  const messageBytes = Buffer.from(messageStr);
+  // 2. Sign EIP-712 Message
+  console.log('\n📝 Signing EIP-712 Payment...');
 
-  console.log('\n📝 Constructing Payment Payload:');
-  console.log(`   Message: "${messageStr}"`);
+  const domain = {
+    name: 'SBC x402 Facilitator',
+    version: '1',
+    chainId: 84532, // Base Sepolia
+    verifyingContract: getAccount('facilitator').address, // Facilitator is the verifying contract in this model
+  } as const;
 
-  // 3. Sign the message
-  const signatureBytes = nacl.sign.detached(messageBytes, client.secretKey);
-  const signature = bs58.encode(signatureBytes);
+  const types = {
+    Payment: [
+      { name: 'from', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'nonce', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' },
+    ],
+  } as const;
+
+  const message = {
+    from: client.address,
+    to: merchant.address,
+    amount: BigInt(amount),
+    nonce: BigInt(nonce),
+    deadline: BigInt(deadline),
+  } as const;
+
+  // Sign with viem
+  const clientWallet = createWalletClient({
+    account: client,
+    chain: baseSepolia,
+    transport: http()
+  });
+
+  const signature = await clientWallet.signTypedData({
+    domain,
+    types,
+    primaryType: 'Payment',
+    message
+  });
   
   console.log(`   Signature: ${signature.substring(0, 10)}...`);
 
-  // 4. Create the x402 Header
+  // 3. Create the x402 Header
   const payload = {
-    from: client.publicKey.toBase58(),
-    to: merchant.publicKey.toBase58(),
+    from: client.address,
+    to: merchant.address,
     amount,
     nonce,
     deadline,
@@ -54,16 +86,16 @@ async function runDemo() {
 
   const paymentHeader = Buffer.from(JSON.stringify({
     scheme: 'exact',
-    network: 'solana-mainnet-beta', // The code currently uses 'solana-mainnet-beta' string identifier even for devnet if RPC is devnet
+    network: 'base-sepolia',
     payload
   })).toString('base64');
 
   const paymentRequirements = {
     maxAmountRequired: amount,
-    payTo: merchant.publicKey.toBase58()
+    payTo: merchant.address
   };
 
-  // 5. Verify Payment
+  // 4. Verify Payment
   console.log(`\n🔍 Sending VERIFICATION request to ${facilitatorUrl}/verify...`);
   
   try {
@@ -82,11 +114,12 @@ async function runDemo() {
 
     if (!verifyResult.isValid) {
         console.error('❌ Verification failed. Aborting settlement.');
+        console.error(`Reason: ${verifyResult.invalidReason}`);
         return;
     }
     console.log('   ✅ Verification Successful!');
 
-    // 6. Settle Payment
+    // 5. Settle Payment
     console.log(`\n💰 Sending SETTLEMENT request to ${facilitatorUrl}/settle...`);
 
     const settleRes = await fetch(`${facilitatorUrl}/settle`, {
@@ -105,7 +138,7 @@ async function runDemo() {
       if (settleResult.success) {
           console.log('\n🎉 SUCCESS: Payment Settled!');
           console.log(`   Transaction Hash: ${settleResult.transaction}`);
-          console.log(`   Explorer: https://explorer.solana.com/tx/${settleResult.transaction}?cluster=devnet`);
+          console.log(`   Explorer: https://sepolia.basescan.org/tx/${settleResult.transaction}`);
       } else {
           console.log('\n❌ FAILURE: Settlement failed.');
           console.log(`   Reason: ${settleResult.errorReason}`);
