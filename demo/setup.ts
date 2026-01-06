@@ -65,16 +65,36 @@ async function setup() {
   console.log(`   Merchant:    ${merchant.address}`);
   console.log(`   Client:      ${client.address} (PAYER)`);
 
-  // 2. Check Client ETH Balance
-  const balance = await publicClient.getBalance({ address: client.address });
-  const ethBalance = formatEther(balance);
+  // 2. Check ETH Balances (Client AND Facilitator)
+  // Client needs ETH to sign the 'approve' transaction during setup.
+  // Facilitator needs ETH to sign the 'transferFrom' transaction during settlement.
   
-  console.log(`\n💰 Client ETH Balance: ${ethBalance} ETH`);
+  const clientBalance = await publicClient.getBalance({ address: client.address });
+  const facilitatorBalance = await publicClient.getBalance({ address: facilitator.address });
+  
+  const clientEth = formatEther(clientBalance);
+  const facilitatorEth = formatEther(facilitatorBalance);
+  
+  console.log(`\n💰 ETH Balances:`);
+  console.log(`   Client:      ${clientEth} ETH`);
+  console.log(`   Facilitator: ${facilitatorEth} ETH`);
 
-  if (balance < parseEther('0.002')) {
-    console.log('\n⚠️  INSUFFICIENT ETH FUNDS');
-    console.log('   Please fund the Client wallet with Base Sepolia ETH for gas.');
+  let needsFunding = false;
+
+  if (clientBalance < parseEther('0.002')) {
+    console.log('\n⚠️  CLIENT NEEDS ETH');
     console.log(`   Address: ${client.address}`);
+    needsFunding = true;
+  }
+
+  if (facilitatorBalance < parseEther('0.002')) {
+    console.log('\n⚠️  FACILITATOR NEEDS ETH');
+    console.log(`   Address: ${facilitator.address}`);
+    needsFunding = true;
+  }
+
+  if (needsFunding) {
+    console.log('\n   Please fund the wallets with Base Sepolia ETH for gas.');
     console.log('   Faucets:');
     console.log('   - https://portal.cdp.coinbase.com/products/faucet');
     console.log('   - https://faucets.chain.link/base-sepolia');
