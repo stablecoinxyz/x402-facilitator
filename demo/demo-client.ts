@@ -26,7 +26,9 @@ async function runDemo() {
   console.log(`🏪 Merchant Wallet: ${merchant.address}`);
 
   // 1. Define payment details
-  const amount = parseEther('0.001').toString(); // 0.001 ETH/WETH
+  // SBC on Base Sepolia has 6 decimals.
+  // We want to send 0.01 SBC = 10000 units
+  const amount = '10000'; 
   const nonce = BigInt(Date.now()).toString();
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600).toString(); // 1 hour from now
 

@@ -17,12 +17,15 @@ This implementation supports **v1** of the x402 protocol.
 
 ### Quick Demo (Base Sepolia)
 
-We have provided a complete demo environment that runs on Base Sepolia.
+We have provided a complete demo environment that runs on Base Sepolia using the actual **SBC Token**.
 
 1.  **Setup the environment:**
     This script will generate EVM wallets for Client, Merchant, and Facilitator.
-    It will check for ETH balance. **If you have no funds, it will pause and provide faucet links.**
-    Once funded, it will wrap ETH to WETH (to simulate an ERC20 token) and approve the Facilitator to spend it.
+    It will check for:
+    *   **ETH Balance (Gas):** If low, it provides faucet links (e.g., Coinbase).
+    *   **SBC Balance (Payment):** If low, it provides the [SBC Faucet link](https://dashboard.stablecoin.xyz/faucet).
+    
+    Once funded, it will approve the Facilitator to spend the Client's SBC tokens.
     ```bash
     npm run setup
     ```
@@ -38,8 +41,8 @@ We have provided a complete demo environment that runs on Base Sepolia.
     ```
 
     The demo client sends a payment request to the facilitator. The facilitator then:
-    1.  Verifies the EIP-712 signature and WETH balance.
-    2.  Executes the settlement (transfers WETH from Client to Merchant using `transferFrom`).
+    1.  Verifies the EIP-712 signature and SBC balance.
+    2.  Executes the settlement (transfers SBC from Client to Merchant).
     3.  Returns the transaction hash (viewable on BaseScan).
 
 ### Configuration
