@@ -27,6 +27,17 @@ export function getSupportedNetworks(req: Request, res: Response) {
     });
   }
 
+  // Add Radius if configured
+  // Determine if it's mainnet or testnet based on chain ID
+  if (config.radiusFacilitatorAddress && config.radiusFacilitatorPrivateKey) {
+    const networkName = config.radiusChainId === 723 ? 'radius' : 'radius-testnet';
+    kinds.push({
+      x402Version: 1,
+      scheme: 'exact',
+      network: networkName
+    });
+  }
+
   // Add Solana mainnet if configured
   if (config.solanaFacilitatorAddress && config.solanaFacilitatorPrivateKey) {
     kinds.push({

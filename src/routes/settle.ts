@@ -56,6 +56,42 @@ const baseSepolia = {
   testnet: true,
 };
 
+// Radius Mainnet Chain Config
+const radiusMainnet = {
+  id: 723,
+  name: 'Radius',
+  network: 'radius',
+  nativeCurrency: {
+    decimals: 18,
+    name: 'Ether',
+    symbol: 'ETH',
+  },
+  rpcUrls: {
+    default: {
+      http: [config.radiusRpcUrl],
+    },
+  },
+  testnet: false,
+};
+
+// Radius Testnet Chain Config (rpcUrl set dynamically)
+const radiusTestnet = {
+  id: 72344,
+  name: 'Radius Testnet',
+  network: 'radius-testnet',
+  nativeCurrency: {
+    decimals: 18,
+    name: 'Ether',
+    symbol: 'ETH',
+  },
+  rpcUrls: {
+    default: {
+      http: [config.radiusRpcUrl || ''],
+    },
+  },
+  testnet: true,
+};
+
 export async function settlePayment(req: Request, res: Response) {
   try {
     const { paymentHeader, paymentRequirements } = req.body;
@@ -95,7 +131,12 @@ export async function settlePayment(req: Request, res: Response) {
     const isBaseMainnet = paymentData.network === 'base' || paymentData.network === '8453';
     const isBase = isBaseSepolia || isBaseMainnet;
 
-    if (!isBase) {
+    // Handle Radius payments
+    const isRadiusTestnet = paymentData.network === 'radius-testnet' || paymentData.network === '72344';
+    const isRadiusMainnet = paymentData.network === 'radius' || paymentData.network === '723';
+    const isRadius = isRadiusTestnet || isRadiusMainnet;
+
+    if (!isBase && !isRadius) {
       console.log('   ❌ Unknown payment network');
       return res.json({
         success: false,
@@ -106,7 +147,11 @@ export async function settlePayment(req: Request, res: Response) {
       });
     }
 
-    console.log(isBaseSepolia ? '   🔵 Base Sepolia settlement' : '   🔵 Base Mainnet settlement');
+    if (isBase) {
+      console.log(isBaseSepolia ? '   🔵 Base Sepolia settlement' : '   🔵 Base Mainnet settlement');
+    } else if (isRadius) {
+      console.log(isRadiusTestnet ? '   🟢 Radius Testnet settlement' : '   🟢 Radius Mainnet settlement');
+    }
 
     const { from, to, amount } = paymentData.payload;
 
@@ -115,17 +160,45 @@ export async function settlePayment(req: Request, res: Response) {
     console.log('   Amount:', amount);
 
     // Select chain config and credentials based on network
-    let chain, rpcUrl, chainName;
+    let chain, rpcUrl, chainName, privateKey;
     if (isBaseSepolia) {
       chain = baseSepolia;
       rpcUrl = 'https://sepolia.base.org';
       chainName = 'Base Sepolia';
+      privateKey = config.baseFacilitatorPrivateKey;
+    } else if (isBaseMainnet) {
+      chain = baseMainnet;
+      rpcUrl = config.baseRpcUrl;
+      chainName = 'Base Mainnet';
+      privateKey = config.baseFacilitatorPrivateKey;
+    } else if (isRadiusTestnet) {
+      if (!config.radiusRpcUrl) {
+        throw new Error('RADIUS_RPC_URL is required for Radius Testnet. Set it in your .env file.');
+      }
+      if (!config.radiusFacilitatorPrivateKey) {
+        throw new Error('RADIUS_FACILITATOR_PRIVATE_KEY is required for Radius. Set it in your .env file.');
+      }
+      chain = radiusTestnet;
+      rpcUrl = config.radiusRpcUrl;
+      chainName = 'Radius Testnet';
+      privateKey = config.radiusFacilitatorPrivateKey;
+    } else if (isRadiusMainnet) {
+      if (!config.radiusRpcUrl) {
+        throw new Error('RADIUS_RPC_URL is required for Radius Mainnet. Set it in your .env file.');
+      }
+      if (!config.radiusFacilitatorPrivateKey) {
+        throw new Error('RADIUS_FACILITATOR_PRIVATE_KEY is required for Radius. Set it in your .env file.');
+      }
+      chain = radiusMainnet;
+      rpcUrl = config.radiusRpcUrl;
+      chainName = 'Radius Mainnet';
+      privateKey = config.radiusFacilitatorPrivateKey;
     } else {
       chain = baseMainnet;
       rpcUrl = config.baseRpcUrl;
       chainName = 'Base Mainnet';
+      privateKey = config.baseFacilitatorPrivateKey;
     }
-    const privateKey = config.baseFacilitatorPrivateKey;
 
     // Create facilitator account
     const account = privateKeyToAccount(privateKey as `0x${string}`);
@@ -174,9 +247,19 @@ export async function settlePayment(req: Request, res: Response) {
       ] as const;
 
       // Use correct SBC token address for network
-      const sbcTokenAddress = isBaseSepolia
-        ? '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16'  // Base Sepolia (6 decimals)
-        : config.baseSbcTokenAddress;                    // Base Mainnet (18 decimals)
+      let sbcTokenAddress: string;
+      if (isBaseSepolia) {
+        sbcTokenAddress = '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16';  // Base Sepolia (6 decimals)
+      } else if (isBase) {
+        sbcTokenAddress = config.baseSbcTokenAddress;  // Base Mainnet
+      } else if (isRadius) {
+        if (!config.radiusSbcTokenAddress) {
+          throw new Error('RADIUS_SBC_TOKEN_ADDRESS is required for Radius. Set it in your .env file.');
+        }
+        sbcTokenAddress = config.radiusSbcTokenAddress;  // Radius
+      } else {
+        sbcTokenAddress = config.baseSbcTokenAddress;
+      }
 
       console.log('   Token:', sbcTokenAddress);
 

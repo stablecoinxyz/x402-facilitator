@@ -14,6 +14,14 @@ export const config = {
   baseSbcTokenAddress: process.env.BASE_SBC_TOKEN_ADDRESS || '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16', // Base Sepolia
   baseSbcDecimals: parseInt(process.env.BASE_SBC_DECIMALS || '6'), // mainnet: 18, sepolia: 6
 
+  // Radius Configuration
+  radiusRpcUrl: process.env.RADIUS_RPC_URL || '',
+  radiusFacilitatorPrivateKey: process.env.RADIUS_FACILITATOR_PRIVATE_KEY || '',
+  radiusFacilitatorAddress: process.env.RADIUS_FACILITATOR_ADDRESS || '',
+  radiusChainId: parseInt(process.env.RADIUS_CHAIN_ID || '723'), // 723 = mainnet, 72344 = testnet
+  radiusSbcTokenAddress: process.env.RADIUS_SBC_TOKEN_ADDRESS || '',
+  radiusSbcDecimals: parseInt(process.env.RADIUS_SBC_DECIMALS || '18'),
+
   // Solana Configuration
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   solanaFacilitatorPrivateKey: process.env.SOLANA_FACILITATOR_PRIVATE_KEY || process.env.FACILITATOR_SOLANA_PRIVATE_KEY || '',
@@ -31,5 +39,7 @@ if (config.solanaFacilitatorPrivateKey && !config.solanaFacilitatorAddress) {
 console.log('✅ Facilitator configuration loaded');
 console.log(`   Base Chain ID: ${config.baseChainId}`);
 console.log(`   Base Facilitator: ${config.baseFacilitatorAddress || 'Not configured'}`);
+console.log(`   Radius Chain ID: ${config.radiusChainId}`);
+console.log(`   Radius Facilitator: ${config.radiusFacilitatorAddress || 'Not configured'}`);
 console.log(`   Solana RPC: ${config.solanaRpcUrl}`);
 console.log(`   Solana Facilitator: ${config.solanaFacilitatorAddress || 'Not configured'}`);

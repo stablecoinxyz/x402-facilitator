@@ -86,7 +86,12 @@ export async function verifyPayment(req: Request, res: Response) {
     const isBaseMainnet = paymentData.network === 'base' || paymentData.network === '8453';
     const isBase = isBaseSepolia || isBaseMainnet;
 
-    if (!isBase) {
+    // Handle Radius payments
+    const isRadiusTestnet = paymentData.network === 'radius-testnet' || paymentData.network === '72344';
+    const isRadiusMainnet = paymentData.network === 'radius' || paymentData.network === '723';
+    const isRadius = isRadiusTestnet || isRadiusMainnet;
+
+    if (!isBase && !isRadius) {
       console.log('   ❌ Unknown payment network');
       return res.json({
         isValid: false,
@@ -95,7 +100,11 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    console.log(isBaseSepolia ? '   🔵 Base Sepolia payment detected' : '   🔵 Base Mainnet payment detected');
+    if (isBase) {
+      console.log(isBaseSepolia ? '   🔵 Base Sepolia payment detected' : '   🔵 Base Mainnet payment detected');
+    } else if (isRadius) {
+      console.log(isRadiusTestnet ? '   🟢 Radius Testnet payment detected' : '   🟢 Radius Mainnet payment detected');
+    }
 
     const { from, to, amount, nonce, deadline, signature } = paymentData.payload;
 
@@ -111,6 +120,33 @@ export async function verifyPayment(req: Request, res: Response) {
       chainId = 84532;
       rpcUrl = 'https://sepolia.base.org';
       facilitatorAddress = config.baseFacilitatorAddress;
+    } else if (isBaseMainnet) {
+      chain = baseMainnet;
+      chainId = config.baseChainId;
+      rpcUrl = config.baseRpcUrl;
+      facilitatorAddress = config.baseFacilitatorAddress;
+    } else if (isRadiusTestnet) {
+      if (!config.radiusRpcUrl) {
+        throw new Error('RADIUS_RPC_URL is required for Radius Testnet. Set it in your .env file.');
+      }
+      if (!config.radiusFacilitatorAddress) {
+        throw new Error('RADIUS_FACILITATOR_ADDRESS is required for Radius. Set it in your .env file.');
+      }
+      chain = { ...baseMainnet, id: 72344, name: 'Radius Testnet', network: 'radius-testnet', testnet: true };
+      chainId = 72344;
+      rpcUrl = config.radiusRpcUrl;
+      facilitatorAddress = config.radiusFacilitatorAddress;
+    } else if (isRadiusMainnet) {
+      if (!config.radiusRpcUrl) {
+        throw new Error('RADIUS_RPC_URL is required for Radius Mainnet. Set it in your .env file.');
+      }
+      if (!config.radiusFacilitatorAddress) {
+        throw new Error('RADIUS_FACILITATOR_ADDRESS is required for Radius. Set it in your .env file.');
+      }
+      chain = { ...baseMainnet, id: 723, name: 'Radius', network: 'radius', testnet: false };
+      chainId = 723;
+      rpcUrl = config.radiusRpcUrl;
+      facilitatorAddress = config.radiusFacilitatorAddress;
     } else {
       chain = baseMainnet;
       chainId = config.baseChainId;
@@ -206,11 +242,24 @@ export async function verifyPayment(req: Request, res: Response) {
     ] as const;
 
     // Use correct SBC token address for network
-    const sbcTokenAddress = isBaseSepolia
-      ? '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16'  // Base Sepolia (6 decimals)
-      : config.baseSbcTokenAddress;                    // Base Mainnet (18 decimals)
-
-    const decimals = isBaseSepolia ? 6 : config.baseSbcDecimals;
+    let sbcTokenAddress: string;
+    let decimals: number;
+    if (isBaseSepolia) {
+      sbcTokenAddress = '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16';  // Base Sepolia (6 decimals)
+      decimals = 6;
+    } else if (isBase) {
+      sbcTokenAddress = config.baseSbcTokenAddress;  // Base Mainnet
+      decimals = config.baseSbcDecimals;
+    } else if (isRadius) {
+      if (!config.radiusSbcTokenAddress) {
+        throw new Error('RADIUS_SBC_TOKEN_ADDRESS is required for Radius. Set it in your .env file.');
+      }
+      sbcTokenAddress = config.radiusSbcTokenAddress;  // Radius
+      decimals = config.radiusSbcDecimals;
+    } else {
+      sbcTokenAddress = config.baseSbcTokenAddress;
+      decimals = config.baseSbcDecimals;
+    }
 
     console.log('   SBC Token:', sbcTokenAddress);
 
