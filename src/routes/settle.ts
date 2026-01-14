@@ -5,16 +5,17 @@ import { config } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 
 /**
- * Payment Settlement Handler
+ * Payment Settlement Handler - x402 V2 with ERC-2612 Permit
  *
  * Executes on-chain transfers for multiple networks:
  *
  * - Solana: Delegated SPL token transfer (handled by solana/settle.ts)
  *   Facilitator executes transfer as delegate: Agent → Merchant
  *
- * - Base: ERC-20 transferFrom
- *   Facilitator calls transferFrom(agent, merchant, amount) using prior approval
- *   Tokens flow: Agent → Merchant (facilitator never holds funds)
+ * - Base/Radius: ERC-2612 Permit + TransferFrom
+ *   1. Facilitator calls permit(owner, spender, value, deadline, v, r, s)
+ *   2. Facilitator calls transferFrom(owner, recipient, value)
+ *   Tokens flow: Payer → Merchant (facilitator never holds funds)
  *
  * All settlement methods maintain non-custodial properties - the facilitator
  * never holds customer funds.
@@ -153,11 +154,27 @@ export async function settlePayment(req: Request, res: Response) {
       console.log(isRadiusTestnet ? '   🟢 Radius Testnet settlement' : '   🟢 Radius Mainnet settlement');
     }
 
-    const { from, to, amount } = paymentData.payload;
+    // Extract permit data (x402 V2 format)
+    const { permit, recipient, signature, v, r, s } = paymentData.payload;
 
-    console.log('   From:', from);
-    console.log('   To:', to);
-    console.log('   Amount:', amount);
+    if (!permit) {
+      console.log('   ❌ Missing permit data');
+      return res.json({
+        success: false,
+        payer: 'unknown',
+        transaction: '',
+        network: paymentData.network,
+        errorReason: 'Missing permit data in payload'
+      });
+    }
+
+    const { owner, spender, value, nonce, deadline } = permit;
+
+    console.log('   Owner (Payer):', owner);
+    console.log('   Spender (Facilitator):', spender);
+    console.log('   Recipient (Merchant):', recipient);
+    console.log('   Value:', value);
+    console.log('   Deadline:', new Date(Number(deadline) * 1000).toISOString());
 
     // Select chain config and credentials based on network
     let chain, rpcUrl, chainName, privateKey;
@@ -224,15 +241,25 @@ export async function settlePayment(req: Request, res: Response) {
     let txHash: string;
 
     if (useRealSettlement) {
-      console.log('   🔥 REAL SETTLEMENT MODE - Executing on-chain transfer');
+      console.log('   🔥 REAL SETTLEMENT MODE - ERC-2612 Permit + TransferFrom');
 
-      // Base: ERC-20 token transferFrom
-      // Facilitator executes: Agent → Merchant (facilitator never holds funds)
-      console.log('   📝 ERC-20 TransferFrom (Agent → Merchant)');
-      console.log('   From (Agent):', from);
-      console.log('   To (Merchant):', to);
-
-      const ERC20_ABI = [
+      // ERC-2612 Permit ABI
+      const ERC20_PERMIT_ABI = [
+        {
+          inputs: [
+            { name: 'owner', type: 'address' },
+            { name: 'spender', type: 'address' },
+            { name: 'value', type: 'uint256' },
+            { name: 'deadline', type: 'uint256' },
+            { name: 'v', type: 'uint8' },
+            { name: 'r', type: 'bytes32' },
+            { name: 's', type: 'bytes32' }
+          ],
+          name: 'permit',
+          outputs: [],
+          stateMutability: 'nonpayable',
+          type: 'function'
+        },
         {
           inputs: [
             { name: 'from', type: 'address' },
@@ -263,27 +290,62 @@ export async function settlePayment(req: Request, res: Response) {
 
       console.log('   Token:', sbcTokenAddress);
 
-      const hash = await walletClient.writeContract({
+      // Step 1: Call permit() to approve the facilitator
+      console.log('   📝 Step 1: Calling permit()...');
+      console.log('      owner:', owner);
+      console.log('      spender:', spender);
+      console.log('      value:', value);
+      console.log('      deadline:', deadline);
+
+      const permitHash = await walletClient.writeContract({
         address: sbcTokenAddress as `0x${string}`,
-        abi: ERC20_ABI,
-        functionName: 'transferFrom',
+        abi: ERC20_PERMIT_ABI,
+        functionName: 'permit',
         args: [
-          from as `0x${string}`,  // Agent (payer)
-          to as `0x${string}`,    // Merchant (receiver)
-          BigInt(amount)
+          owner as `0x${string}`,
+          spender as `0x${string}`,
+          BigInt(value),
+          BigInt(deadline),
+          v,
+          r as `0x${string}`,
+          s as `0x${string}`
         ]
       });
 
-      txHash = hash;
+      console.log('   ⏳ Waiting for permit confirmation...');
+      await publicClient.waitForTransactionReceipt({
+        hash: permitHash,
+        confirmations: 1
+      });
+      console.log('   ✅ Permit tx:', permitHash);
 
-      console.log('   ⏳ Waiting for confirmation...');
+      // Step 2: Call transferFrom() to move tokens to merchant
+      console.log('   📝 Step 2: Calling transferFrom()...');
+      console.log('      from:', owner);
+      console.log('      to:', recipient);
+      console.log('      amount:', value);
+
+      const transferHash = await walletClient.writeContract({
+        address: sbcTokenAddress as `0x${string}`,
+        abi: ERC20_PERMIT_ABI,
+        functionName: 'transferFrom',
+        args: [
+          owner as `0x${string}`,      // Payer
+          recipient as `0x${string}`,  // Merchant
+          BigInt(value)
+        ]
+      });
+
+      txHash = transferHash;
+
+      console.log('   ⏳ Waiting for transfer confirmation...');
 
       const receipt = await publicClient.waitForTransactionReceipt({
-        hash,
+        hash: transferHash,
         confirmations: 1
       });
 
-      console.log('   ✅ Real tx hash:', txHash);
+      console.log('   ✅ Transfer tx:', txHash);
       console.log('   ✅ Block number:', receipt.blockNumber);
       console.log('   ✅ Gas used:', receipt.gasUsed);
       console.log(`✅ Settlement complete on ${chainName}!\n`);
@@ -299,7 +361,7 @@ export async function settlePayment(req: Request, res: Response) {
 
     res.json({
       success: true,
-      payer: from,
+      payer: owner,
       transaction: txHash,
       network: paymentData.network,
     });
@@ -312,7 +374,7 @@ export async function settlePayment(req: Request, res: Response) {
     let network = 'unknown';
     try {
       const paymentData = JSON.parse(Buffer.from(req.body.paymentHeader, 'base64').toString());
-      payer = paymentData.payload?.from || 'unknown';
+      payer = paymentData.payload?.permit?.owner || 'unknown';
       network = paymentData.network || 'unknown';
     } catch {}
 
