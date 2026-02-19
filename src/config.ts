@@ -7,12 +7,12 @@ export const config = {
   port: parseInt(process.env.FACILITATOR_PORT || '3001'),
 
   // Base Configuration
-  baseRpcUrl: process.env.BASE_RPC_URL || 'https://sepolia.base.org',
+  baseRpcUrl: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
   baseFacilitatorPrivateKey: process.env.BASE_FACILITATOR_PRIVATE_KEY || '',
   baseFacilitatorAddress: process.env.BASE_FACILITATOR_ADDRESS || '',
-  baseChainId: parseInt(process.env.BASE_CHAIN_ID || '84532'), // 8453 = mainnet, 84532 = sepolia
-  baseSbcTokenAddress: process.env.BASE_SBC_TOKEN_ADDRESS || '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16', // Base Sepolia
-  baseSbcDecimals: parseInt(process.env.BASE_SBC_DECIMALS || '6'), // mainnet: 18, sepolia: 6
+  baseChainId: parseInt(process.env.BASE_CHAIN_ID || '8453'), // 8453 = mainnet, 84532 = sepolia
+  baseSbcTokenAddress: process.env.BASE_SBC_TOKEN_ADDRESS || '0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798', // Base Mainnet
+  baseSbcDecimals: parseInt(process.env.BASE_SBC_DECIMALS || '18'),
 
   // Radius Configuration
   radiusRpcUrl: process.env.RADIUS_RPC_URL || '',

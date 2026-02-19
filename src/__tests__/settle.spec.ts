@@ -58,7 +58,7 @@ describe('POST /settle - x402 Spec Compliance', () => {
 
       // Spec format: { success: true, payer: "0x...", transaction: "0x...", network: "base" }
       if (response.body.success) {
-        expect(response.body.payer).toBe(paymentData.payload.from);
+        expect(response.body.payer).toBe((paymentData.payload as any).permit?.owner ?? (paymentData.payload as any).from);
         expect(response.body.transaction).toBeTruthy();
         expect(response.body.network).toBe(paymentData.network);
       }
@@ -89,7 +89,7 @@ describe('POST /settle - x402 Spec Compliance', () => {
       // Spec format: { success: false, errorReason: "...", payer: "0x...", transaction: "", network: "base" }
       expect(response.body.success).toBe(false);
       expect(response.body.errorReason).toBeTruthy();
-      expect(response.body.payer).toBe(paymentData.payload.from);
+      expect(response.body.payer).toBe((paymentData.payload as any).permit?.owner ?? (paymentData.payload as any).from);
       expect(response.body.transaction).toBe('');
       expect(response.body.network).toBe(paymentData.network);
     });
@@ -314,7 +314,7 @@ describe('POST /settle - x402 Spec Compliance', () => {
           paymentRequirements,
         });
 
-      expect(response.body.payer).toBe(paymentData.payload.from);
+      expect(response.body.payer).toBe((paymentData.payload as any).permit?.owner ?? (paymentData.payload as any).from);
     }, 15000);
 
     it('should extract payer from Solana payment', async () => {
@@ -330,7 +330,7 @@ describe('POST /settle - x402 Spec Compliance', () => {
           paymentRequirements,
         });
 
-      expect(response.body.payer).toBe(paymentData.payload.from);
+      expect(response.body.payer).toBe((paymentData.payload as any).permit?.owner ?? (paymentData.payload as any).from);
     }, 30000); // 30 second timeout for Solana
   });
 

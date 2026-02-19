@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPublicClient, http, Hex } from 'viem';
-import { baseSepolia } from 'viem/chains';
+import { base } from 'viem/chains';
 
 export const DATA_DIR = path.join(__dirname, '.data');
 
@@ -11,7 +11,7 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 export const publicClient = createPublicClient({
-  chain: baseSepolia,
+  chain: base,
   transport: http()
 });
 

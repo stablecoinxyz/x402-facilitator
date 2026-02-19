@@ -74,7 +74,7 @@ describe('POST /verify - x402 Spec Compliance', () => {
 
       // Spec format: { isValid: true, payer: "0x..." }
       if (response.body.isValid) {
-        expect(response.body.payer).toBe(paymentData.payload.from);
+        expect(response.body.payer).toBe(paymentData.payload.permit.owner);
       }
     });
 
@@ -100,7 +100,7 @@ describe('POST /verify - x402 Spec Compliance', () => {
 
       // Spec format: { isValid: false, invalidReason: "...", payer: "0x..." }
       expect(response.body.isValid).toBe(false);
-      expect(response.body.payer).toBe(paymentData.payload.from);
+      expect(response.body.payer).toBe(paymentData.payload.permit.owner);
       expect(response.body.invalidReason).toBeTruthy();
     });
 
