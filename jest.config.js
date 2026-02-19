@@ -1,3 +1,5 @@
+process.env.ENABLE_REAL_SETTLEMENT = 'false';
+
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
