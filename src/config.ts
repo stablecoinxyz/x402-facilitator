@@ -15,12 +15,12 @@ export const config = {
   baseSbcDecimals: parseInt(process.env.BASE_SBC_DECIMALS || '18'),
 
   // Radius Configuration
-  radiusRpcUrl: process.env.RADIUS_RPC_URL || '',
+  radiusRpcUrl: process.env.RADIUS_RPC_URL || 'https://rpc.radiustech.xyz',
   radiusFacilitatorPrivateKey: process.env.RADIUS_FACILITATOR_PRIVATE_KEY || '',
   radiusFacilitatorAddress: process.env.RADIUS_FACILITATOR_ADDRESS || '',
   radiusChainId: parseInt(process.env.RADIUS_CHAIN_ID || '723'), // 723 = mainnet, 72344 = testnet
-  radiusSbcTokenAddress: process.env.RADIUS_SBC_TOKEN_ADDRESS || '',
-  radiusSbcDecimals: parseInt(process.env.RADIUS_SBC_DECIMALS || '18'),
+  radiusSbcTokenAddress: process.env.RADIUS_SBC_TOKEN_ADDRESS || '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb',
+  radiusSbcDecimals: parseInt(process.env.RADIUS_SBC_DECIMALS || '6'),
 
   // Solana Configuration
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
