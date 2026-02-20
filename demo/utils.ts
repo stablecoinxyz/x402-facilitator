@@ -65,7 +65,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     sbcAddress: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb",
     sbcDecimals: 6,
     networkId: "eip155:72344",
-    explorerTxUrl: "https://testnet.radiustech.xyz/testnet/explorer",
+    explorerTxUrl: "https://testnet.radiustech.xyz/testnet/explorer?view=tx-details&hash=",
     extra: { assetTransferMethod: "erc2612", name: "Stable Coin", version: "1" },
   },
 };

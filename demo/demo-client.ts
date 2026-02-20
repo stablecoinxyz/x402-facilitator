@@ -33,7 +33,7 @@ async function runDemo() {
   const merchant = getAccount('merchant');
   const facilitator = getAccount('facilitator');
 
-  const port = 3001;
+  const port = parseInt(process.env.FACILITATOR_PORT || '3001');
   const facilitatorUrl = `http://localhost:${port}`;
 
   console.log(`🔑 Client Wallet: ${client.address}`);

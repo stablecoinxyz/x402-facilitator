@@ -21,19 +21,31 @@ app.get('/supported', getSupportedNetworks);
 app.post('/verify', verifyPayment);
 app.post('/settle', settlePayment);
 
-// Start server
-app.listen(config.port, () => {
-  console.log('\n🚀 SBC x402 Facilitator');
-  console.log('========================');
-  console.log(`✅ Server running on port ${config.port}`);
-  console.log(`✅ Base Mainnet: ${config.baseFacilitatorAddress ? 'configured' : 'not configured'}`);
-  console.log(`✅ Base Sepolia: ${config.baseSepoliaFacilitatorAddress ? 'configured' : 'not configured'}`);
-  console.log(`✅ Radius Mainnet: ${config.radiusFacilitatorAddress ? 'configured' : 'not configured'}`);
-  console.log(`✅ Radius Testnet: ${config.radiusTestnetFacilitatorAddress ? 'configured' : 'not configured'}`);
-  console.log(`✅ Solana: ${config.solanaFacilitatorAddress ? 'configured' : 'not configured'}`);
-  console.log('\n📡 Endpoints:');
-  console.log(`   GET  http://localhost:${config.port}/supported (x402 Capability Discovery)`);
-  console.log(`   POST http://localhost:${config.port}/verify (Payment Verification)`);
-  console.log(`   POST http://localhost:${config.port}/settle (Payment Settlement)`);
-  console.log('\n⏳ Waiting for payment requests...\n');
-});
+// Start server — try config.port, then increment until an available port is found
+function startServer(port: number) {
+  const server = app.listen(port, () => {
+    console.log('\n🚀 SBC x402 Facilitator');
+    console.log('========================');
+    console.log(`✅ Server running on port ${port}`);
+    console.log(`✅ Base Mainnet: ${config.baseFacilitatorAddress ? 'configured' : 'not configured'}`);
+    console.log(`✅ Base Sepolia: ${config.baseSepoliaFacilitatorAddress ? 'configured' : 'not configured'}`);
+    console.log(`✅ Radius Mainnet: ${config.radiusFacilitatorAddress ? 'configured' : 'not configured'}`);
+    console.log(`✅ Radius Testnet: ${config.radiusTestnetFacilitatorAddress ? 'configured' : 'not configured'}`);
+    console.log(`✅ Solana: ${config.solanaFacilitatorAddress ? 'configured' : 'not configured'}`);
+    console.log('\n📡 Endpoints:');
+    console.log(`   GET  http://localhost:${port}/supported (x402 Capability Discovery)`);
+    console.log(`   POST http://localhost:${port}/verify (Payment Verification)`);
+    console.log(`   POST http://localhost:${port}/settle (Payment Settlement)`);
+    console.log('\n⏳ Waiting for payment requests...\n');
+  });
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`⚠️  Port ${port} in use, trying ${port + 1}...`);
+      startServer(port + 1);
+    } else {
+      throw err;
+    }
+  });
+}
+
+startServer(config.port);
