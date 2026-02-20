@@ -25,19 +25,30 @@ This implementation supports **v1** of the x402 protocol using **ERC-2612 Permit
 
 ## Usage
 
-### Quick Demo (Base Mainnet)
+### Quick Demo
 
-We have provided a complete demo environment that runs on Base Mainnet using [SBC](https://basescan.org/address/0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798).
+We have provided a complete demo environment using SBC tokens. The demo supports multiple networks via the `--network` flag.
+
+**Available networks:**
+
+| Network | Flag | Description |
+|---------|------|-------------|
+| `base` | `--network base` | Base Mainnet (default) |
+| `base-sepolia` | `--network base-sepolia` | Base Sepolia Testnet |
+| `radius` | `--network radius` | Radius Mainnet |
+| `radius-testnet` | `--network radius-testnet` | Radius Testnet |
 
 1.  **Setup the environment:**
     This script will generate EVM wallets for Client, Merchant, and Facilitator.
     It will check for:
-    *   **ETH Balance (Gas):** Wallets need Base ETH for gas.
+    *   **ETH Balance (Gas):** Wallets need ETH for gas on the selected network.
     *   **SBC Balance (Payment):** Client needs SBC tokens.
 
     Once funded, it will approve the Facilitator to spend the Client's SBC tokens.
     ```bash
-    npm run setup
+    npm run setup                            # defaults to Base Mainnet
+    npm run setup -- --network base-sepolia  # use Base Sepolia testnet
+    npm run setup -- --network radius        # use Radius Mainnet
     ```
 
 2.  **Start the server** (Terminal 1):
@@ -47,14 +58,15 @@ We have provided a complete demo environment that runs on Base Mainnet using [SB
 
 3.  **Run the demo client** (Terminal 2):
     ```bash
-    npm run demo
+    npm run demo                            # defaults to Base Mainnet
+    npm run demo -- --network base-sepolia  # must match the network used in setup
     ```
 
     The demo client signs an ERC-2612 Permit and sends a payment request to the facilitator. The facilitator then:
     1.  Verifies the permit signature and SBC balance.
     2.  Calls `permit()` on-chain to approve the transfer.
     3.  Calls `transferFrom()` to settle (SBC from Client to Merchant).
-    4.  Returns the transaction hash (viewable on [BaseScan](https://basescan.org)).
+    4.  Returns the transaction hash.
 
 ### Configuration
 

@@ -1,11 +1,8 @@
-import { createWalletClient, createPublicClient, http } from 'viem';
-import { base } from 'viem/chains';
-import { getAccount, DATA_DIR } from './utils';
+import { createWalletClient, http } from 'viem';
+import { getAccount, getPublicClient, getNetwork, getViemChain, DATA_DIR } from './utils';
 import fs from 'fs';
 import path from 'path';
 
-// Base Mainnet SBC Token Address (18 decimals)
-const SBC_ADDRESS = '0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798';
 // Minimal ABI for nonces()
 const NONCES_ABI = [
   {
@@ -18,8 +15,13 @@ const NONCES_ABI = [
 ] as const;
 
 async function runDemo() {
-  console.log('🚀 Starting x402 Facilitator Demo Client (Base Mainnet)');
+  const network = getNetwork();
+  const publicClient = getPublicClient(network);
+  const chain = getViemChain(network);
+
+  console.log(`🚀 Starting x402 Facilitator Demo Client (${network.name})`);
   console.log('========================================================');
+  console.log(`🌐 Network: ${network.name} (chainId: ${network.chainId})`);
 
   // 0. Load Configuration
   if (!fs.existsSync(path.join(DATA_DIR, 'client.key'))) {
@@ -39,20 +41,18 @@ async function runDemo() {
   console.log(`🤝 Facilitator: ${facilitator.address}`);
 
   // 1. Define payment details
-  // SBC on Base Mainnet has 18 decimals.
-  // 0.01 SBC = 10000000000000000 units
-  const amount = '10000000000000000';
+  // 0.01 SBC in the token's native decimals
+  const amountUnits = BigInt(1) * BigInt(10) ** BigInt(network.sbcDecimals) / BigInt(100);
+  const amount = amountUnits.toString();
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600).toString(); // 1 hour from now
+
+  console.log(`\n💰 Payment: 0.01 SBC (${amount} units, ${network.sbcDecimals} decimals)`);
 
   // 2. Read on-chain nonce for ERC-2612 permit
   console.log('\n🔍 Reading on-chain permit nonce...');
-  const publicClient = createPublicClient({
-    chain: base,
-    transport: http()
-  });
 
   const nonce = await publicClient.readContract({
-    address: SBC_ADDRESS,
+    address: network.sbcAddress,
     abi: NONCES_ABI,
     functionName: 'nonces',
     args: [client.address]
@@ -66,8 +66,8 @@ async function runDemo() {
   const domain = {
     name: 'Stable Coin',
     version: '1',
-    chainId: 8453,
-    verifyingContract: SBC_ADDRESS as `0x${string}`,
+    chainId: network.chainId,
+    verifyingContract: network.sbcAddress,
   } as const;
 
   const types = {
@@ -90,8 +90,8 @@ async function runDemo() {
 
   const clientWallet = createWalletClient({
     account: client,
-    chain: base,
-    transport: http()
+    chain,
+    transport: http(network.rpcUrl)
   });
 
   const signature = await clientWallet.signTypedData({
@@ -126,7 +126,7 @@ async function runDemo() {
 
   const paymentHeader = Buffer.from(JSON.stringify({
     scheme: 'exact',
-    network: 'base',
+    network: network.networkId,
     payload
   })).toString('base64');
 
@@ -178,7 +178,9 @@ async function runDemo() {
       if (settleResult.success) {
           console.log('\n🎉 SUCCESS: Payment Settled!');
           console.log(`   Transaction Hash: ${settleResult.transaction}`);
-          console.log(`   Explorer: https://basescan.org/tx/${settleResult.transaction}`);
+          if (network.explorerTxUrl) {
+            console.log(`   Explorer: ${network.explorerTxUrl}${settleResult.transaction}`);
+          }
       } else {
           console.log('\n❌ FAILURE: Settlement failed.');
           console.log(`   Reason: ${settleResult.errorReason}`);
