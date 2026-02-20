@@ -1,6 +1,6 @@
 # x402-facilitator
 
-SBC x402 Facilitator — verifies and settles payments using the [x402 protocol](https://github.com/coinbase/x402) (v1).
+SBC x402 Facilitator — verifies and settles payments using the [x402 protocol](https://github.com/coinbase/x402) (v2).
 
 ## Supported Networks
 

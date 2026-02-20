@@ -115,7 +115,7 @@ export async function settleSolanaPayment(
       success: true,
       payer: from,
       transaction: signature,
-      network: 'solana-mainnet-beta',
+      network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
     };
   } catch (error: any) {
     console.error('❌ Solana settlement error:', error);
@@ -126,7 +126,7 @@ export async function settleSolanaPayment(
       success: false,
       payer: paymentPayload.from || 'unknown',
       transaction: '',
-      network: 'solana-mainnet-beta',
+      network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
       errorReason: error.message,
     };
   }

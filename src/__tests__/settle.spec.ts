@@ -1,8 +1,7 @@
 /**
  * POST /settle Endpoint Tests
  *
- * Tests x402 specification compliance for payment settlement
- * Reference: https://github.com/coinbase/x402/blob/main/specs/x402-specification.md Section 7.2
+ * Tests x402 v2 specification compliance for payment settlement
  */
 
 import request from 'supertest';
@@ -12,7 +11,6 @@ import {
   createBasePayment,
   createSolanaPayment,
   createPaymentRequirements,
-  encodePaymentHeader,
 } from './fixtures/payment-fixtures';
 
 // Create test app
@@ -23,253 +21,169 @@ function createTestApp() {
   return app;
 }
 
-describe('POST /settle - x402 Spec Compliance', () => {
+/** Helper: send v2 settle request */
+function sendSettle(app: express.Application, paymentPayload: any, paymentRequirements: any) {
+  return request(app)
+    .post('/settle')
+    .send({ paymentPayload, paymentRequirements });
+}
+
+describe('POST /settle - x402 V2 Spec Compliance', () => {
   let app: express.Application;
 
   beforeEach(() => {
     app = createTestApp();
   });
 
-  describe('Response Format (Section 7.2)', () => {
+  describe('Response Format', () => {
     it('should return spec-compliant success response', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      // x402 spec requires these fields
       expect(response.body).toHaveProperty('success');
       expect(response.body).toHaveProperty('payer');
       expect(response.body).toHaveProperty('transaction');
       expect(response.body).toHaveProperty('network');
 
-      // Check field types
       expect(typeof response.body.success).toBe('boolean');
       expect(typeof response.body.payer).toBe('string');
       expect(typeof response.body.transaction).toBe('string');
       expect(typeof response.body.network).toBe('string');
 
-      // Spec format: { success: true, payer: "0x...", transaction: "0x...", network: "base" }
       if (response.body.success) {
-        expect(response.body.payer).toBe((paymentData.payload as any).permit?.owner ?? (paymentData.payload as any).from);
+        expect(response.body.payer).toBe(paymentPayload.payload.authorization.from);
         expect(response.body.transaction).toBeTruthy();
-        expect(response.body.network).toBe(paymentData.network);
+        expect(response.body.network).toBe('eip155:8453');
       }
     }, 15000);
 
     it('should return spec-compliant error response', async () => {
-      // Create a payment missing permit data to trigger an error
-      const paymentData = createBasePayment();
-      delete (paymentData.payload as any).permit;
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      delete (paymentPayload.payload as any).authorization;
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      // x402 spec requires these fields even on error
       expect(response.body).toHaveProperty('success');
-      expect(response.body).toHaveProperty('errorReason'); // NOT "error"
+      expect(response.body).toHaveProperty('errorReason');
       expect(response.body).toHaveProperty('payer');
       expect(response.body).toHaveProperty('transaction');
       expect(response.body).toHaveProperty('network');
 
-      // Spec format: { success: false, errorReason: "...", payer: "0x...", transaction: "", network: "base" }
       expect(response.body.success).toBe(false);
       expect(response.body.errorReason).toBeTruthy();
       expect(response.body.transaction).toBe('');
-      expect(response.body.network).toBe(paymentData.network);
+      expect(response.body.network).toBe('eip155:8453');
     });
 
     it('should use "transaction" field name (not "txHash")', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      // Must use spec-compliant field name
       expect(response.body).toHaveProperty('transaction');
-      expect(response.body).not.toHaveProperty('txHash'); // Old non-compliant name
+      expect(response.body).not.toHaveProperty('txHash');
     }, 15000);
 
-    it('should use "network" field with network name (not "networkId" with chain ID)', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+    it('should use CAIP-2 "network" field', async () => {
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      // Must use spec-compliant field name and format
       expect(response.body).toHaveProperty('network');
-      expect(response.body).not.toHaveProperty('networkId'); // Old non-compliant name
+      expect(response.body).not.toHaveProperty('networkId');
 
-      // Network should be name like "base", not chain ID like "8453"
       if (response.body.success) {
-        expect(response.body.network).toBe('base');
-        expect(response.body.network).not.toBe('8453');
+        expect(response.body.network).toBe('eip155:8453');
       }
     }, 15000);
 
     it('should use "errorReason" field name (not "error")', async () => {
-      const paymentData = createBasePayment({
-        deadline: Math.floor(Date.now() / 1000) - 300, // Expired
+      const paymentPayload = createBasePayment({
+        deadline: Math.floor(Date.now() / 1000) - 300,
       });
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
       if (!response.body.success) {
         expect(response.body).toHaveProperty('errorReason');
-        expect(response.body).not.toHaveProperty('error'); // Old non-compliant name
+        expect(response.body).not.toHaveProperty('error');
       }
     }, 15000);
 
     it('should NOT include non-standard fields in response', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      // Should only have spec-defined fields
       const allowedFields = ['success', 'payer', 'transaction', 'network', 'errorReason'];
       Object.keys(response.body).forEach(key => {
         expect(allowedFields).toContain(key);
       });
-    }, 15000); // 15 second timeout for real blockchain transaction
+    }, 15000);
   });
 
   describe('Multi-Chain Settlement', () => {
     it('should settle Base mainnet payments', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      // Base mainnet requires facilitator to have ETH for gas and valid signatures
-      // If facilitator lacks funds or signature is invalid, test will fail with 500
-      // This is expected behavior for unit tests without real blockchain setup
       if (response.status === 500) {
-        console.log('   ⚠️  Base test skipped:', response.body.errorReason);
         expect(response.body.success).toBe(false);
-        expect(response.body.network).toBe('base');
+        expect(response.body.network).toBe('eip155:8453');
       } else {
         expect(response.status).toBe(200);
-        expect(response.body.network).toBe('base');
+        expect(response.body.network).toBe('eip155:8453');
       }
     }, 15000);
 
     it('should settle Solana mainnet payments', async () => {
-      const paymentData = createSolanaPayment();
-      const paymentRequirements = createPaymentRequirements('solana-mainnet-beta');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createSolanaPayment();
+      const paymentRequirements = createPaymentRequirements('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
       expect(response.status).toBe(200);
-      expect(response.body.network).toBe('solana-mainnet-beta');
-    }, 30000); // 30 second timeout for Solana
+      expect(response.body.network).toBe('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp');
+    }, 30000);
   });
 
-  describe('Network Name Format', () => {
-    it('should return network name "base" (not chain ID "8453")', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+  describe('Network Name Format (CAIP-2)', () => {
+    it('should return CAIP-2 network "eip155:8453"', async () => {
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      expect(response.body.network).toBe('base');
+      expect(response.body.network).toBe('eip155:8453');
+      expect(response.body.network).not.toBe('base');
       expect(response.body.network).not.toBe('8453');
     }, 15000);
 
-    it('should return network name "solana-mainnet-beta"', async () => {
-      const paymentData = createSolanaPayment();
-      const paymentRequirements = createPaymentRequirements('solana-mainnet-beta');
-      const paymentHeader = encodePaymentHeader(paymentData);
+    it('should return CAIP-2 network for Solana', async () => {
+      const paymentPayload = createSolanaPayment();
+      const paymentRequirements = createPaymentRequirements('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      expect(response.body.network).toBe('solana-mainnet-beta');
-    }, 30000); // 30 second timeout for Solana
+      expect(response.body.network).toBe('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp');
+    }, 30000);
   });
 
   describe('Transaction Hash Format', () => {
     it('should return transaction hash for successful settlement', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
       if (response.body.success) {
         expect(response.body.transaction).toBeTruthy();
@@ -279,19 +193,11 @@ describe('POST /settle - x402 Spec Compliance', () => {
     }, 15000);
 
     it('should return empty string for failed settlement', async () => {
-      const paymentData = createBasePayment({
-        to: '0xInvalidAddress000000000000000000000',
-      });
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      delete (paymentPayload.payload as any).authorization;
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
       if (!response.body.success) {
         expect(response.body.transaction).toBe('');
@@ -301,46 +207,30 @@ describe('POST /settle - x402 Spec Compliance', () => {
 
   describe('Payer Field', () => {
     it('should extract payer from EVM payment', async () => {
-      const paymentData = createBasePayment();
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      expect(response.body.payer).toBe((paymentData.payload as any).permit?.owner ?? (paymentData.payload as any).from);
+      expect(response.body.payer).toBe(paymentPayload.payload.authorization.from);
     }, 15000);
 
     it('should extract payer from Solana payment', async () => {
-      const paymentData = createSolanaPayment();
-      const paymentRequirements = createPaymentRequirements('solana-mainnet-beta');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createSolanaPayment();
+      const paymentRequirements = createPaymentRequirements('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      expect(response.body.payer).toBe((paymentData.payload as any).permit?.owner ?? (paymentData.payload as any).from);
-    }, 30000); // 30 second timeout for Solana
+      expect(response.body.payer).toBe(paymentPayload.payload.from);
+    }, 30000);
   });
 
   describe('Error Handling', () => {
-    it('should handle malformed payment header', async () => {
+    it('should handle missing paymentPayload', async () => {
       const response = await request(app)
         .post('/settle')
         .send({
-          x402Version: 1,
-          paymentHeader: 'invalid-base64!!!',
-          paymentRequirements: createPaymentRequirements('base'),
+          paymentRequirements: createPaymentRequirements('eip155:8453'),
         });
 
       expect(response.status).toBe(500);
@@ -349,39 +239,124 @@ describe('POST /settle - x402 Spec Compliance', () => {
     });
 
     it('should handle unsupported scheme', async () => {
-      const paymentData = createBasePayment();
-      paymentData.scheme = 'unsupported_scheme';
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.scheme = 'unsupported_scheme';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
       expect(response.body.success).toBe(false);
       expect(response.body.errorReason).toContain('scheme');
     });
 
     it('should handle unsupported network', async () => {
-      const paymentData = createBasePayment();
-      paymentData.network = 'unsupported-network';
-      const paymentRequirements = createPaymentRequirements('base');
-      const paymentHeader = encodePaymentHeader(paymentData);
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.network = 'unsupported-network';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
 
-      const response = await request(app)
-        .post('/settle')
-        .send({
-          x402Version: 1,
-          paymentHeader,
-          paymentRequirements,
-        });
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
       expect(response.body.success).toBe(false);
       expect(response.body.errorReason).toContain('network');
+    });
+
+    it('should handle missing authorization data', async () => {
+      const paymentPayload = createBasePayment();
+      delete (paymentPayload.payload as any).authorization;
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.errorReason).toContain('Missing authorization');
+      expect(response.body.transaction).toBe('');
+    });
+  });
+
+  describe('CAIP-2 Parsing', () => {
+    it('should reject bare chain ID "8453"', async () => {
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.network = '8453';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.errorReason).toContain('network');
+    });
+
+    it('should reject "eip155:" with no chain ID', async () => {
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.network = 'eip155:';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.errorReason).toContain('network');
+    });
+
+    it('should reject "eip155:abc" with non-numeric chain ID', async () => {
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.network = 'eip155:abc';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.errorReason).toContain('network');
+    });
+
+    it('should reject valid CAIP-2 format but unknown chain ID', async () => {
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.network = 'eip155:999999';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.errorReason).toContain('Unknown network: eip155:999999');
+    });
+
+    it('should reject legacy network names', async () => {
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.network = 'base';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.errorReason).toContain('network');
+    });
+  });
+
+  describe('Signature Parsing', () => {
+    it('should handle signature that is too short', async () => {
+      const paymentPayload = createBasePayment();
+      paymentPayload.payload.signature = '0x1234'; // Way too short for v,r,s extraction
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      // Signature slicing will produce garbage but shouldn't crash —
+      // the privateKeyToAccount or writeContract call will fail in real mode,
+      // but in simulated mode this just produces a simulated hash.
+      // The key thing is it doesn't throw an unhandled exception.
+      expect(response.body).toHaveProperty('success');
+      expect(response.body).toHaveProperty('network');
+    }, 15000);
+
+    it('should handle null signature gracefully', async () => {
+      const paymentPayload = createBasePayment();
+      (paymentPayload.payload as any).signature = null;
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      // Should hit catch block because signature.slice() will throw on null
+      expect(response.status).toBe(500);
+      expect(response.body.success).toBe(false);
+      expect(response.body.errorReason).toBeTruthy();
     });
   });
 });

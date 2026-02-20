@@ -19,9 +19,9 @@ async function runDemo() {
   const publicClient = getPublicClient(network);
   const chain = getViemChain(network);
 
-  console.log(`🚀 Starting x402 Facilitator Demo Client (${network.name})`);
+  console.log(`🚀 Starting x402 Facilitator Demo Client (${network.name}) — v2 Protocol`);
   console.log('========================================================');
-  console.log(`🌐 Network: ${network.name} (chainId: ${network.chainId})`);
+  console.log(`🌐 Network: ${network.name} (CAIP-2: ${network.networkId})`);
 
   // 0. Load Configuration
   if (!fs.existsSync(path.join(DATA_DIR, 'client.key'))) {
@@ -64,8 +64,8 @@ async function runDemo() {
   console.log('\n📝 Signing ERC-2612 Permit...');
 
   const domain = {
-    name: 'Stable Coin',
-    version: '1',
+    name: network.extra.name,
+    version: network.extra.version,
     chainId: network.chainId,
     verifyingContract: network.sbcAddress,
   } as const;
@@ -103,39 +103,41 @@ async function runDemo() {
 
   console.log(`   Signature: ${signature.substring(0, 10)}...`);
 
-  // 4. Extract v, r, s from signature
-  const r = `0x${signature.slice(2, 66)}` as `0x${string}`;
-  const s = `0x${signature.slice(66, 130)}` as `0x${string}`;
-  const v = parseInt(signature.slice(130, 132), 16);
+  // 4. Build x402 v2 paymentPayload (JSON object, no base64)
+  const resource = `${facilitatorUrl}/api/resource`;
 
-  // 5. Create the x402 Header with ERC-2612 Permit payload
-  const payload = {
-    permit: {
-      owner: client.address,
-      spender: facilitator.address,
-      value: amount,
-      nonce: nonce.toString(),
-      deadline,
+  const paymentPayload = {
+    x402Version: 2,
+    resource,
+    accepted: {
+      scheme: 'exact',
+      network: network.networkId,
     },
-    recipient: merchant.address,
-    signature,
-    v,
-    r,
-    s,
+    payload: {
+      signature,
+      authorization: {
+        from: client.address,
+        to: facilitator.address,
+        value: amount,
+        validAfter: '0',
+        validBefore: deadline,
+        nonce: nonce.toString(),
+      },
+    },
+    extensions: {},
   };
-
-  const paymentHeader = Buffer.from(JSON.stringify({
-    scheme: 'exact',
-    network: network.networkId,
-    payload
-  })).toString('base64');
 
   const paymentRequirements = {
-    maxAmountRequired: amount,
-    payTo: merchant.address
+    scheme: 'exact',
+    network: network.networkId,
+    amount,
+    asset: network.sbcAddress,
+    payTo: merchant.address,
+    maxTimeoutSeconds: 60,
+    extra: network.extra,
   };
 
-  // 6. Verify Payment
+  // 5. Verify Payment
   console.log(`\n🔍 Sending VERIFICATION request to ${facilitatorUrl}/verify...`);
 
   try {
@@ -143,9 +145,8 @@ async function runDemo() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        x402Version: '1.0',
-        paymentHeader,
-        paymentRequirements
+        paymentPayload,
+        paymentRequirements,
       })
     });
 
@@ -159,16 +160,15 @@ async function runDemo() {
     }
     console.log('   ✅ Verification Successful!');
 
-    // 7. Settle Payment
+    // 6. Settle Payment
     console.log(`\n💰 Sending SETTLEMENT request to ${facilitatorUrl}/settle...`);
 
     const settleRes = await fetch(`${facilitatorUrl}/settle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          x402Version: '1.0',
-          paymentHeader,
-          paymentRequirements
+          paymentPayload,
+          paymentRequirements,
         })
       });
 

@@ -21,14 +21,18 @@ import { settleSolanaPayment } from '../solana/settle';
  * never holds customer funds.
  */
 
-/** Resolve network string to chain config + credentials */
-function resolveEvmNetwork(network: string) {
-  const isBaseSepolia = network === 'base-sepolia' || network === '84532';
-  const isBaseMainnet = network === 'base' || network === '8453';
-  const isRadiusTestnet = network === 'radius-testnet' || network === '72344';
-  const isRadiusMainnet = network === 'radius' || network === '723';
+/** Parse CAIP-2 network identifier to extract chain ID, e.g. "eip155:8453" → 8453 */
+function parseEvmChainId(network: string): number | null {
+  const match = network.match(/^eip155:(\d+)$/);
+  return match ? parseInt(match[1], 10) : null;
+}
 
-  if (isBaseMainnet) {
+/** Resolve CAIP-2 network string to chain config + credentials */
+function resolveEvmNetwork(network: string) {
+  const chainId = parseEvmChainId(network);
+  if (chainId === null) return null;
+
+  if (chainId === config.baseChainId) {
     return {
       label: 'Base Mainnet',
       emoji: '🔵',
@@ -40,7 +44,7 @@ function resolveEvmNetwork(network: string) {
       testnet: false,
     };
   }
-  if (isBaseSepolia) {
+  if (chainId === config.baseSepoliaChainId) {
     return {
       label: 'Base Sepolia',
       emoji: '🔵',
@@ -52,7 +56,7 @@ function resolveEvmNetwork(network: string) {
       testnet: true,
     };
   }
-  if (isRadiusMainnet) {
+  if (chainId === config.radiusChainId) {
     return {
       label: 'Radius Mainnet',
       emoji: '🟢',
@@ -64,7 +68,7 @@ function resolveEvmNetwork(network: string) {
       testnet: false,
     };
   }
-  if (isRadiusTestnet) {
+  if (chainId === config.radiusTestnetChainId) {
     return {
       label: 'Radius Testnet',
       emoji: '🟢',
@@ -81,68 +85,85 @@ function resolveEvmNetwork(network: string) {
 
 export async function settlePayment(req: Request, res: Response) {
   try {
-    const { paymentHeader, paymentRequirements } = req.body;
+    const { paymentPayload, paymentRequirements } = req.body;
 
     console.log('\n💰 Settling payment...');
 
-    // Decode payment header
-    const paymentData = JSON.parse(
-      Buffer.from(paymentHeader, 'base64').toString()
-    );
-
-    console.log('   Scheme:', paymentData.scheme);
-    console.log('   Network:', paymentData.network);
-
-    // Verify scheme is "exact"
-    if (paymentData.scheme !== 'exact') {
-      console.log('   ❌ Unsupported payment scheme');
-      return res.json({
+    if (!paymentPayload) {
+      return res.status(500).json({
         success: false,
-        payer: paymentData.payload?.from || 'unknown',
+        payer: 'unknown',
         transaction: '',
-        network: paymentData.network || 'unknown',
-        errorReason: `Unsupported scheme: ${paymentData.scheme}`
+        network: 'unknown',
+        errorReason: 'Missing paymentPayload',
       });
     }
 
-    // Route by network
-    if (paymentData.network === 'solana-mainnet-beta') {
+    const network = paymentPayload.accepted?.network;
+    const scheme = paymentPayload.accepted?.scheme;
+
+    console.log('   Scheme:', scheme);
+    console.log('   Network:', network);
+
+    // Verify scheme is "exact"
+    if (scheme !== 'exact') {
+      console.log('   ❌ Unsupported payment scheme');
+      return res.json({
+        success: false,
+        payer: paymentPayload.payload?.authorization?.from || 'unknown',
+        transaction: '',
+        network: network || 'unknown',
+        errorReason: `Unsupported scheme: ${scheme}`
+      });
+    }
+
+    // Route by network — Solana uses CAIP-2 "solana:..." prefix
+    if (network?.startsWith('solana:')) {
       console.log('   🟣 Solana settlement (delegated transfer)');
-      const result = await settleSolanaPayment(paymentData.payload);
+      const result = await settleSolanaPayment(paymentPayload.payload);
       console.log(result.success ? '✅ Settlement complete!\n' : '❌ Settlement failed!\n');
       return res.json(result);
     }
 
-    // Resolve EVM network
-    const networkConfig = resolveEvmNetwork(paymentData.network);
+    // Resolve EVM network from CAIP-2 identifier
+    const networkConfig = resolveEvmNetwork(network);
     if (!networkConfig) {
       console.log('   ❌ Unknown payment network');
       return res.json({
         success: false,
-        payer: paymentData.payload?.from || 'unknown',
+        payer: paymentPayload.payload?.authorization?.from || 'unknown',
         transaction: '',
-        network: paymentData.network || 'unknown',
-        errorReason: `Unknown network: ${paymentData.network}`
+        network: network || 'unknown',
+        errorReason: `Unknown network: ${network}`
       });
     }
 
     console.log(`   ${networkConfig.emoji} ${networkConfig.label} settlement`);
 
-    // Extract permit data (x402 V2 format)
-    const { permit, recipient, signature, v, r, s } = paymentData.payload;
+    // Extract v2 authorization + signature
+    const { authorization, signature } = paymentPayload.payload || {};
 
-    if (!permit) {
-      console.log('   ❌ Missing permit data');
+    if (!authorization) {
+      console.log('   ❌ Missing authorization data');
       return res.json({
         success: false,
         payer: 'unknown',
         transaction: '',
-        network: paymentData.network,
-        errorReason: 'Missing permit data in payload'
+        network,
+        errorReason: 'Missing authorization data in payload'
       });
     }
 
-    const { owner, spender, value, nonce, deadline } = permit;
+    const owner = authorization.from;
+    const spender = authorization.to;
+    const value = authorization.value;
+    const deadline = authorization.validBefore;
+    const recipient = paymentRequirements.payTo;
+
+    // Derive v, r, s from compact signature for on-chain permit()
+    const r = `0x${signature.slice(2, 66)}` as `0x${string}`;
+    const s = `0x${signature.slice(66, 130)}` as `0x${string}`;
+    const v = parseInt(signature.slice(130, 132), 16);
 
     console.log('   Owner (Payer):', owner);
     console.log('   Spender (Facilitator):', spender);
@@ -158,7 +179,7 @@ export async function settlePayment(req: Request, res: Response) {
     const chain = {
       id: networkConfig.chainId,
       name: networkConfig.label,
-      network: paymentData.network,
+      network,
       nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' },
       rpcUrls: { default: { http: [networkConfig.rpcUrl] } },
       testnet: networkConfig.testnet,
@@ -295,7 +316,7 @@ export async function settlePayment(req: Request, res: Response) {
       success: true,
       payer: owner,
       transaction: txHash,
-      network: paymentData.network,
+      network,
     });
 
   } catch (error: any) {
@@ -305,9 +326,8 @@ export async function settlePayment(req: Request, res: Response) {
     let payer = 'unknown';
     let network = 'unknown';
     try {
-      const paymentData = JSON.parse(Buffer.from(req.body.paymentHeader, 'base64').toString());
-      payer = paymentData.payload?.permit?.owner || 'unknown';
-      network = paymentData.network || 'unknown';
+      payer = req.body.paymentPayload?.payload?.authorization?.from || 'unknown';
+      network = req.body.paymentPayload?.accepted?.network || 'unknown';
     } catch {}
 
     res.status(500).json({
