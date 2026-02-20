@@ -6,21 +6,37 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 export const config = {
   port: parseInt(process.env.FACILITATOR_PORT || '3001'),
 
-  // Base Configuration
+  // Base Mainnet Configuration
   baseRpcUrl: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
   baseFacilitatorPrivateKey: process.env.BASE_FACILITATOR_PRIVATE_KEY || '',
   baseFacilitatorAddress: process.env.BASE_FACILITATOR_ADDRESS || '',
-  baseChainId: parseInt(process.env.BASE_CHAIN_ID || '8453'), // 8453 = mainnet, 84532 = sepolia
-  baseSbcTokenAddress: process.env.BASE_SBC_TOKEN_ADDRESS || '0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798', // Base Mainnet
+  baseChainId: parseInt(process.env.BASE_CHAIN_ID || '8453'),
+  baseSbcTokenAddress: process.env.BASE_SBC_TOKEN_ADDRESS || '0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798',
   baseSbcDecimals: parseInt(process.env.BASE_SBC_DECIMALS || '18'),
 
-  // Radius Configuration
+  // Base Sepolia Configuration
+  baseSepoliaRpcUrl: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
+  baseSepoliaFacilitatorPrivateKey: process.env.BASE_SEPOLIA_FACILITATOR_PRIVATE_KEY || '',
+  baseSepoliaFacilitatorAddress: process.env.BASE_SEPOLIA_FACILITATOR_ADDRESS || '',
+  baseSepoliaChainId: 84532,
+  baseSepoliaSbcTokenAddress: process.env.BASE_SEPOLIA_SBC_TOKEN_ADDRESS || '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16',
+  baseSepoliaSbcDecimals: parseInt(process.env.BASE_SEPOLIA_SBC_DECIMALS || '6'),
+
+  // Radius Mainnet Configuration
   radiusRpcUrl: process.env.RADIUS_RPC_URL || 'https://rpc.radiustech.xyz',
   radiusFacilitatorPrivateKey: process.env.RADIUS_FACILITATOR_PRIVATE_KEY || '',
   radiusFacilitatorAddress: process.env.RADIUS_FACILITATOR_ADDRESS || '',
-  radiusChainId: parseInt(process.env.RADIUS_CHAIN_ID || '723'), // 723 = mainnet, 72344 = testnet
+  radiusChainId: parseInt(process.env.RADIUS_CHAIN_ID || '723'),
   radiusSbcTokenAddress: process.env.RADIUS_SBC_TOKEN_ADDRESS || '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb',
   radiusSbcDecimals: parseInt(process.env.RADIUS_SBC_DECIMALS || '6'),
+
+  // Radius Testnet Configuration
+  radiusTestnetRpcUrl: process.env.RADIUS_TESTNET_RPC_URL || 'https://rpc.testnet.radiustech.xyz',
+  radiusTestnetFacilitatorPrivateKey: process.env.RADIUS_TESTNET_FACILITATOR_PRIVATE_KEY || '',
+  radiusTestnetFacilitatorAddress: process.env.RADIUS_TESTNET_FACILITATOR_ADDRESS || '',
+  radiusTestnetChainId: 72344,
+  radiusTestnetSbcTokenAddress: process.env.RADIUS_TESTNET_SBC_TOKEN_ADDRESS || '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb',
+  radiusTestnetSbcDecimals: parseInt(process.env.RADIUS_TESTNET_SBC_DECIMALS || '6'),
 
   // Solana Configuration
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
@@ -37,9 +53,8 @@ if (config.solanaFacilitatorPrivateKey && !config.solanaFacilitatorAddress) {
 }
 
 console.log('✅ Facilitator configuration loaded');
-console.log(`   Base Chain ID: ${config.baseChainId}`);
-console.log(`   Base Facilitator: ${config.baseFacilitatorAddress || 'Not configured'}`);
-console.log(`   Radius Chain ID: ${config.radiusChainId}`);
-console.log(`   Radius Facilitator: ${config.radiusFacilitatorAddress || 'Not configured'}`);
-console.log(`   Solana RPC: ${config.solanaRpcUrl}`);
-console.log(`   Solana Facilitator: ${config.solanaFacilitatorAddress || 'Not configured'}`);
+console.log(`   Base Mainnet: ${config.baseFacilitatorAddress || 'Not configured'}`);
+console.log(`   Base Sepolia: ${config.baseSepoliaFacilitatorAddress || 'Not configured'}`);
+console.log(`   Radius Mainnet: ${config.radiusFacilitatorAddress || 'Not configured'}`);
+console.log(`   Radius Testnet: ${config.radiusTestnetFacilitatorAddress || 'Not configured'}`);
+console.log(`   Solana: ${config.solanaFacilitatorAddress || 'Not configured'}`);

@@ -26,8 +26,11 @@ app.listen(config.port, () => {
   console.log('\n🚀 SBC x402 Facilitator');
   console.log('========================');
   console.log(`✅ Server running on port ${config.port}`);
-  console.log(`✅ Chain: Base (${config.baseChainId})`);
-  console.log(`✅ Chain: Solana (mainnet-beta)`);
+  console.log(`✅ Base Mainnet: ${config.baseFacilitatorAddress ? 'configured' : 'not configured'}`);
+  console.log(`✅ Base Sepolia: ${config.baseSepoliaFacilitatorAddress ? 'configured' : 'not configured'}`);
+  console.log(`✅ Radius Mainnet: ${config.radiusFacilitatorAddress ? 'configured' : 'not configured'}`);
+  console.log(`✅ Radius Testnet: ${config.radiusTestnetFacilitatorAddress ? 'configured' : 'not configured'}`);
+  console.log(`✅ Solana: ${config.solanaFacilitatorAddress ? 'configured' : 'not configured'}`);
   console.log('\n📡 Endpoints:');
   console.log(`   GET  http://localhost:${config.port}/supported (x402 Capability Discovery)`);
   console.log(`   POST http://localhost:${config.port}/verify (Payment Verification)`);

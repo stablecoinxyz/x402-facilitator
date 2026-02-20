@@ -16,25 +16,39 @@ export function getSupportedNetworks(req: Request, res: Response) {
     network: string;
   }> = [];
 
-  // Add Base if configured
-  // Determine if it's mainnet or sepolia based on chain ID
+  // Add Base Mainnet if configured
   if (config.baseFacilitatorAddress && config.baseFacilitatorPrivateKey) {
-    const networkName = config.baseChainId === 8453 ? 'base' : 'base-sepolia';
     kinds.push({
       x402Version: 1,
       scheme: 'exact',
-      network: networkName
+      network: 'base'
     });
   }
 
-  // Add Radius if configured
-  // Determine if it's mainnet or testnet based on chain ID
-  if (config.radiusFacilitatorAddress && config.radiusFacilitatorPrivateKey) {
-    const networkName = config.radiusChainId === 723 ? 'radius' : 'radius-testnet';
+  // Add Base Sepolia if configured
+  if (config.baseSepoliaFacilitatorAddress && config.baseSepoliaFacilitatorPrivateKey) {
     kinds.push({
       x402Version: 1,
       scheme: 'exact',
-      network: networkName
+      network: 'base-sepolia'
+    });
+  }
+
+  // Add Radius Mainnet if configured
+  if (config.radiusFacilitatorAddress && config.radiusFacilitatorPrivateKey) {
+    kinds.push({
+      x402Version: 1,
+      scheme: 'exact',
+      network: 'radius'
+    });
+  }
+
+  // Add Radius Testnet if configured
+  if (config.radiusTestnetFacilitatorAddress && config.radiusTestnetFacilitatorPrivateKey) {
+    kinds.push({
+      x402Version: 1,
+      scheme: 'exact',
+      network: 'radius-testnet'
     });
   }
 

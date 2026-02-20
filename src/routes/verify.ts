@@ -12,24 +12,6 @@ import { verifySolanaPayment } from '../solana/verify';
  * - Base/Radius: ERC-2612 Permit signature verification
  */
 
-// Base Mainnet Chain Config
-const baseMainnet = {
-  id: 8453,
-  name: 'Base',
-  network: 'base',
-  nativeCurrency: {
-    decimals: 18,
-    name: 'Ether',
-    symbol: 'ETH',
-  },
-  rpcUrls: {
-    default: {
-      http: [config.baseRpcUrl],
-    },
-  },
-  testnet: false,
-};
-
 // ERC-2612 Permit EIP-712 Types
 const permitTypes = {
   Permit: [
@@ -40,6 +22,56 @@ const permitTypes = {
     { name: 'deadline', type: 'uint256' },
   ],
 };
+
+/** Resolve network string to chain config from environment */
+function resolveEvmNetwork(network: string) {
+  const isBaseSepolia = network === 'base-sepolia' || network === '84532';
+  const isBaseMainnet = network === 'base' || network === '8453';
+  const isRadiusTestnet = network === 'radius-testnet' || network === '72344';
+  const isRadiusMainnet = network === 'radius' || network === '723';
+
+  if (isBaseMainnet) {
+    return {
+      label: 'Base Mainnet',
+      emoji: '🔵',
+      chainId: config.baseChainId,
+      rpcUrl: config.baseRpcUrl,
+      sbcTokenAddress: config.baseSbcTokenAddress,
+      decimals: config.baseSbcDecimals,
+    };
+  }
+  if (isBaseSepolia) {
+    return {
+      label: 'Base Sepolia',
+      emoji: '🔵',
+      chainId: config.baseSepoliaChainId,
+      rpcUrl: config.baseSepoliaRpcUrl,
+      sbcTokenAddress: config.baseSepoliaSbcTokenAddress,
+      decimals: config.baseSepoliaSbcDecimals,
+    };
+  }
+  if (isRadiusMainnet) {
+    return {
+      label: 'Radius Mainnet',
+      emoji: '🟢',
+      chainId: config.radiusChainId,
+      rpcUrl: config.radiusRpcUrl,
+      sbcTokenAddress: config.radiusSbcTokenAddress,
+      decimals: config.radiusSbcDecimals,
+    };
+  }
+  if (isRadiusTestnet) {
+    return {
+      label: 'Radius Testnet',
+      emoji: '🟢',
+      chainId: config.radiusTestnetChainId,
+      rpcUrl: config.radiusTestnetRpcUrl,
+      sbcTokenAddress: config.radiusTestnetSbcTokenAddress,
+      decimals: config.radiusTestnetSbcDecimals,
+    };
+  }
+  return null;
+}
 
 export async function verifyPayment(req: Request, res: Response) {
   try {
@@ -73,17 +105,9 @@ export async function verifyPayment(req: Request, res: Response) {
       return res.json(result);
     }
 
-    // Handle Base payments
-    const isBaseSepolia = paymentData.network === 'base-sepolia' || paymentData.network === '84532';
-    const isBaseMainnet = paymentData.network === 'base' || paymentData.network === '8453';
-    const isBase = isBaseSepolia || isBaseMainnet;
-
-    // Handle Radius payments
-    const isRadiusTestnet = paymentData.network === 'radius-testnet' || paymentData.network === '72344';
-    const isRadiusMainnet = paymentData.network === 'radius' || paymentData.network === '723';
-    const isRadius = isRadiusTestnet || isRadiusMainnet;
-
-    if (!isBase && !isRadius) {
+    // Resolve EVM network
+    const networkConfig = resolveEvmNetwork(paymentData.network);
+    if (!networkConfig) {
       console.log('   ❌ Unknown payment network');
       return res.json({
         isValid: false,
@@ -92,11 +116,7 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    if (isBase) {
-      console.log(isBaseSepolia ? '   🔵 Base Sepolia payment detected' : '   🔵 Base Mainnet payment detected');
-    } else if (isRadius) {
-      console.log(isRadiusTestnet ? '   🟢 Radius Testnet payment detected' : '   🟢 Radius Mainnet payment detected');
-    }
+    console.log(`   ${networkConfig.emoji} ${networkConfig.label} payment detected`);
 
     // Extract permit data
     const { permit, recipient, signature, v, r, s } = paymentData.payload;
@@ -118,55 +138,22 @@ export async function verifyPayment(req: Request, res: Response) {
     console.log('   Value:', value);
     console.log('   Deadline:', new Date(Number(deadline) * 1000).toISOString());
 
-    // Select chain config and RPC based on network
-    let chain, chainId, rpcUrl, sbcTokenAddress: string, decimals: number;
-
-    if (isBaseSepolia) {
-      chain = { ...baseMainnet, id: 84532, name: 'Base Sepolia', testnet: true };
-      chainId = 84532;
-      rpcUrl = 'https://sepolia.base.org';
-      sbcTokenAddress = '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16';
-      decimals = 6;
-    } else if (isBaseMainnet) {
-      chain = baseMainnet;
-      chainId = config.baseChainId;
-      rpcUrl = config.baseRpcUrl;
-      sbcTokenAddress = config.baseSbcTokenAddress;
-      decimals = config.baseSbcDecimals;
-    } else if (isRadiusTestnet) {
-      if (!config.radiusRpcUrl || !config.radiusSbcTokenAddress) {
-        throw new Error('RADIUS_RPC_URL and RADIUS_SBC_TOKEN_ADDRESS required for Radius');
-      }
-      chain = { ...baseMainnet, id: 72344, name: 'Radius Testnet', network: 'radius-testnet', testnet: true };
-      chainId = 72344;
-      rpcUrl = config.radiusRpcUrl;
-      sbcTokenAddress = config.radiusSbcTokenAddress;
-      decimals = config.radiusSbcDecimals;
-    } else if (isRadiusMainnet) {
-      if (!config.radiusRpcUrl || !config.radiusSbcTokenAddress) {
-        throw new Error('RADIUS_RPC_URL and RADIUS_SBC_TOKEN_ADDRESS required for Radius');
-      }
-      chain = { ...baseMainnet, id: 723, name: 'Radius', network: 'radius', testnet: false };
-      chainId = 723;
-      rpcUrl = config.radiusRpcUrl;
-      sbcTokenAddress = config.radiusSbcTokenAddress;
-      decimals = config.radiusSbcDecimals;
-    } else {
-      chain = baseMainnet;
-      chainId = config.baseChainId;
-      rpcUrl = config.baseRpcUrl;
-      sbcTokenAddress = config.baseSbcTokenAddress;
-      decimals = config.baseSbcDecimals;
-    }
+    // Build chain object for viem
+    const chain = {
+      id: networkConfig.chainId,
+      name: networkConfig.label,
+      network: paymentData.network,
+      nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' },
+      rpcUrls: { default: { http: [networkConfig.rpcUrl] } },
+      testnet: networkConfig.label.includes('Sepolia') || networkConfig.label.includes('Testnet'),
+    };
 
     // 2. Verify ERC-2612 Permit signature
-    // Domain is the TOKEN's domain, not facilitator
-    // Token name from eip712Domain(): "Stable Coin" (not "SBC")
     const permitDomain = {
-      name: 'Stable Coin',  // Actual token name from contract
+      name: 'Stable Coin',
       version: '1',
-      chainId,
-      verifyingContract: sbcTokenAddress as `0x${string}`,
+      chainId: networkConfig.chainId,
+      verifyingContract: networkConfig.sbcTokenAddress as `0x${string}`,
     };
 
     const permitMessage = {
@@ -246,7 +233,7 @@ export async function verifyPayment(req: Request, res: Response) {
     // 6. Check on-chain ERC-20 token balance
     const publicClient = createPublicClient({
       chain,
-      transport: http(rpcUrl),
+      transport: http(networkConfig.rpcUrl),
     });
 
     const ERC20_ABI = [
@@ -259,16 +246,16 @@ export async function verifyPayment(req: Request, res: Response) {
       }
     ] as const;
 
-    console.log('   SBC Token:', sbcTokenAddress);
+    console.log('   SBC Token:', networkConfig.sbcTokenAddress);
 
     const balance = await publicClient.readContract({
-      address: sbcTokenAddress as `0x${string}`,
+      address: networkConfig.sbcTokenAddress as `0x${string}`,
       abi: ERC20_ABI,
       functionName: 'balanceOf',
       args: [owner as `0x${string}`]
     });
 
-    const balanceFormatted = Number(balance) / Math.pow(10, decimals);
+    const balanceFormatted = Number(balance) / Math.pow(10, networkConfig.decimals);
     console.log(`   Sender SBC balance: ${balance.toString()} (${balanceFormatted} SBC)`);
 
     if (balance < BigInt(value)) {

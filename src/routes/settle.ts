@@ -21,77 +21,63 @@ import { settleSolanaPayment } from '../solana/settle';
  * never holds customer funds.
  */
 
-// Base Mainnet Chain Config
-const baseMainnet = {
-  id: 8453,
-  name: 'Base',
-  network: 'base',
-  nativeCurrency: {
-    decimals: 18,
-    name: 'Ether',
-    symbol: 'ETH',
-  },
-  rpcUrls: {
-    default: {
-      http: [config.baseRpcUrl],
-    },
-  },
-  testnet: false,
-};
+/** Resolve network string to chain config + credentials */
+function resolveEvmNetwork(network: string) {
+  const isBaseSepolia = network === 'base-sepolia' || network === '84532';
+  const isBaseMainnet = network === 'base' || network === '8453';
+  const isRadiusTestnet = network === 'radius-testnet' || network === '72344';
+  const isRadiusMainnet = network === 'radius' || network === '723';
 
-// Base Sepolia Chain Config
-const baseSepolia = {
-  id: 84532,
-  name: 'Base Sepolia',
-  network: 'base-sepolia',
-  nativeCurrency: {
-    decimals: 18,
-    name: 'Sepolia Ether',
-    symbol: 'ETH',
-  },
-  rpcUrls: {
-    default: {
-      http: ['https://sepolia.base.org'],
-    },
-  },
-  testnet: true,
-};
-
-// Radius Mainnet Chain Config
-const radiusMainnet = {
-  id: 723,
-  name: 'Radius',
-  network: 'radius',
-  nativeCurrency: {
-    decimals: 18,
-    name: 'Ether',
-    symbol: 'ETH',
-  },
-  rpcUrls: {
-    default: {
-      http: [config.radiusRpcUrl],
-    },
-  },
-  testnet: false,
-};
-
-// Radius Testnet Chain Config (rpcUrl set dynamically)
-const radiusTestnet = {
-  id: 72344,
-  name: 'Radius Testnet',
-  network: 'radius-testnet',
-  nativeCurrency: {
-    decimals: 18,
-    name: 'Ether',
-    symbol: 'ETH',
-  },
-  rpcUrls: {
-    default: {
-      http: [config.radiusRpcUrl || ''],
-    },
-  },
-  testnet: true,
-};
+  if (isBaseMainnet) {
+    return {
+      label: 'Base Mainnet',
+      emoji: '🔵',
+      chainId: config.baseChainId,
+      rpcUrl: config.baseRpcUrl,
+      sbcTokenAddress: config.baseSbcTokenAddress,
+      decimals: config.baseSbcDecimals,
+      privateKey: config.baseFacilitatorPrivateKey,
+      testnet: false,
+    };
+  }
+  if (isBaseSepolia) {
+    return {
+      label: 'Base Sepolia',
+      emoji: '🔵',
+      chainId: config.baseSepoliaChainId,
+      rpcUrl: config.baseSepoliaRpcUrl,
+      sbcTokenAddress: config.baseSepoliaSbcTokenAddress,
+      decimals: config.baseSepoliaSbcDecimals,
+      privateKey: config.baseSepoliaFacilitatorPrivateKey,
+      testnet: true,
+    };
+  }
+  if (isRadiusMainnet) {
+    return {
+      label: 'Radius Mainnet',
+      emoji: '🟢',
+      chainId: config.radiusChainId,
+      rpcUrl: config.radiusRpcUrl,
+      sbcTokenAddress: config.radiusSbcTokenAddress,
+      decimals: config.radiusSbcDecimals,
+      privateKey: config.radiusFacilitatorPrivateKey,
+      testnet: false,
+    };
+  }
+  if (isRadiusTestnet) {
+    return {
+      label: 'Radius Testnet',
+      emoji: '🟢',
+      chainId: config.radiusTestnetChainId,
+      rpcUrl: config.radiusTestnetRpcUrl,
+      sbcTokenAddress: config.radiusTestnetSbcTokenAddress,
+      decimals: config.radiusTestnetSbcDecimals,
+      privateKey: config.radiusTestnetFacilitatorPrivateKey,
+      testnet: true,
+    };
+  }
+  return null;
+}
 
 export async function settlePayment(req: Request, res: Response) {
   try {
@@ -127,17 +113,9 @@ export async function settlePayment(req: Request, res: Response) {
       return res.json(result);
     }
 
-    // Handle Base payments
-    const isBaseSepolia = paymentData.network === 'base-sepolia' || paymentData.network === '84532';
-    const isBaseMainnet = paymentData.network === 'base' || paymentData.network === '8453';
-    const isBase = isBaseSepolia || isBaseMainnet;
-
-    // Handle Radius payments
-    const isRadiusTestnet = paymentData.network === 'radius-testnet' || paymentData.network === '72344';
-    const isRadiusMainnet = paymentData.network === 'radius' || paymentData.network === '723';
-    const isRadius = isRadiusTestnet || isRadiusMainnet;
-
-    if (!isBase && !isRadius) {
+    // Resolve EVM network
+    const networkConfig = resolveEvmNetwork(paymentData.network);
+    if (!networkConfig) {
       console.log('   ❌ Unknown payment network');
       return res.json({
         success: false,
@@ -148,11 +126,7 @@ export async function settlePayment(req: Request, res: Response) {
       });
     }
 
-    if (isBase) {
-      console.log(isBaseSepolia ? '   🔵 Base Sepolia settlement' : '   🔵 Base Mainnet settlement');
-    } else if (isRadius) {
-      console.log(isRadiusTestnet ? '   🟢 Radius Testnet settlement' : '   🟢 Radius Mainnet settlement');
-    }
+    console.log(`   ${networkConfig.emoji} ${networkConfig.label} settlement`);
 
     // Extract permit data (x402 V2 format)
     const { permit, recipient, signature, v, r, s } = paymentData.payload;
@@ -176,64 +150,37 @@ export async function settlePayment(req: Request, res: Response) {
     console.log('   Value:', value);
     console.log('   Deadline:', new Date(Number(deadline) * 1000).toISOString());
 
-    // Select chain config and credentials based on network
-    let chain, rpcUrl, chainName, privateKey;
-    if (isBaseSepolia) {
-      chain = baseSepolia;
-      rpcUrl = 'https://sepolia.base.org';
-      chainName = 'Base Sepolia';
-      privateKey = config.baseFacilitatorPrivateKey;
-    } else if (isBaseMainnet) {
-      chain = baseMainnet;
-      rpcUrl = config.baseRpcUrl;
-      chainName = 'Base Mainnet';
-      privateKey = config.baseFacilitatorPrivateKey;
-    } else if (isRadiusTestnet) {
-      if (!config.radiusRpcUrl) {
-        throw new Error('RADIUS_RPC_URL is required for Radius Testnet. Set it in your .env file.');
-      }
-      if (!config.radiusFacilitatorPrivateKey) {
-        throw new Error('RADIUS_FACILITATOR_PRIVATE_KEY is required for Radius. Set it in your .env file.');
-      }
-      chain = radiusTestnet;
-      rpcUrl = config.radiusRpcUrl;
-      chainName = 'Radius Testnet';
-      privateKey = config.radiusFacilitatorPrivateKey;
-    } else if (isRadiusMainnet) {
-      if (!config.radiusRpcUrl) {
-        throw new Error('RADIUS_RPC_URL is required for Radius Mainnet. Set it in your .env file.');
-      }
-      if (!config.radiusFacilitatorPrivateKey) {
-        throw new Error('RADIUS_FACILITATOR_PRIVATE_KEY is required for Radius. Set it in your .env file.');
-      }
-      chain = radiusMainnet;
-      rpcUrl = config.radiusRpcUrl;
-      chainName = 'Radius Mainnet';
-      privateKey = config.radiusFacilitatorPrivateKey;
-    } else {
-      chain = baseMainnet;
-      rpcUrl = config.baseRpcUrl;
-      chainName = 'Base Mainnet';
-      privateKey = config.baseFacilitatorPrivateKey;
+    if (!networkConfig.privateKey) {
+      throw new Error(`Facilitator private key not configured for ${networkConfig.label}. Set the appropriate env var in .env.`);
     }
 
+    // Build chain object for viem
+    const chain = {
+      id: networkConfig.chainId,
+      name: networkConfig.label,
+      network: paymentData.network,
+      nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' },
+      rpcUrls: { default: { http: [networkConfig.rpcUrl] } },
+      testnet: networkConfig.testnet,
+    };
+
     // Create facilitator account
-    const account = privateKeyToAccount(privateKey as `0x${string}`);
+    const account = privateKeyToAccount(networkConfig.privateKey as `0x${string}`);
 
     // Create wallet client
     const walletClient = createWalletClient({
       account,
       chain,
-      transport: http(rpcUrl),
+      transport: http(networkConfig.rpcUrl),
     });
 
     // Create public client
     const publicClient = createPublicClient({
       chain,
-      transport: http(rpcUrl),
+      transport: http(networkConfig.rpcUrl),
     });
 
-    console.log(`   Executing transfer on ${chainName}...`);
+    console.log(`   Executing transfer on ${networkConfig.label}...`);
 
     // Check if we should use real or simulated settlement
     const useRealSettlement = process.env.ENABLE_REAL_SETTLEMENT === 'true';
@@ -273,22 +220,7 @@ export async function settlePayment(req: Request, res: Response) {
         }
       ] as const;
 
-      // Use correct SBC token address for network
-      let sbcTokenAddress: string;
-      if (isBaseSepolia) {
-        sbcTokenAddress = '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16';  // Base Sepolia (6 decimals)
-      } else if (isBase) {
-        sbcTokenAddress = config.baseSbcTokenAddress;  // Base Mainnet
-      } else if (isRadius) {
-        if (!config.radiusSbcTokenAddress) {
-          throw new Error('RADIUS_SBC_TOKEN_ADDRESS is required for Radius. Set it in your .env file.');
-        }
-        sbcTokenAddress = config.radiusSbcTokenAddress;  // Radius
-      } else {
-        sbcTokenAddress = config.baseSbcTokenAddress;
-      }
-
-      console.log('   Token:', sbcTokenAddress);
+      console.log('   Token:', networkConfig.sbcTokenAddress);
 
       // Step 1: Call permit() to approve the facilitator
       console.log('   📝 Step 1: Calling permit()...');
@@ -298,7 +230,7 @@ export async function settlePayment(req: Request, res: Response) {
       console.log('      deadline:', deadline);
 
       const permitHash = await walletClient.writeContract({
-        address: sbcTokenAddress as `0x${string}`,
+        address: networkConfig.sbcTokenAddress as `0x${string}`,
         abi: ERC20_PERMIT_ABI,
         functionName: 'permit',
         args: [
@@ -326,7 +258,7 @@ export async function settlePayment(req: Request, res: Response) {
       console.log('      amount:', value);
 
       const transferHash = await walletClient.writeContract({
-        address: sbcTokenAddress as `0x${string}`,
+        address: networkConfig.sbcTokenAddress as `0x${string}`,
         abi: ERC20_PERMIT_ABI,
         functionName: 'transferFrom',
         args: [
@@ -348,7 +280,7 @@ export async function settlePayment(req: Request, res: Response) {
       console.log('   ✅ Transfer tx:', txHash);
       console.log('   ✅ Block number:', receipt.blockNumber);
       console.log('   ✅ Gas used:', receipt.gasUsed);
-      console.log(`✅ Settlement complete on ${chainName}!\n`);
+      console.log(`✅ Settlement complete on ${networkConfig.label}!\n`);
     } else {
       console.log('   ⚠️  SIMULATED MODE - Set ENABLE_REAL_SETTLEMENT=true for real transactions');
 

@@ -63,6 +63,8 @@ describe('GET /supported - x402 Spec Compliance', () => {
       const validNetworks = [
         'base',
         'base-sepolia',
+        'radius',
+        'radius-testnet',
         'solana-mainnet-beta'
       ];
 
@@ -183,7 +185,7 @@ describe('GET /supported - x402 Spec Compliance', () => {
         expect(kind.network).not.toBe('84532');
 
         // Should be valid network name
-        const validNames = ['base', 'base-sepolia', 'solana-mainnet-beta'];
+        const validNames = ['base', 'base-sepolia', 'radius', 'radius-testnet', 'solana-mainnet-beta'];
         expect(validNames).toContain(kind.network);
       });
     });
