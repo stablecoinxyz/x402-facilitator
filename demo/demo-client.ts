@@ -33,8 +33,8 @@ async function runDemo() {
   const merchant = getAccount('merchant');
   const facilitator = getAccount('facilitator');
 
-  const port = parseInt(process.env.FACILITATOR_PORT || '3001');
-  const facilitatorUrl = `http://localhost:${port}`;
+  const facilitatorUrl = process.env.FACILITATOR_URL
+    || `http://localhost:${parseInt(process.env.FACILITATOR_PORT || '3001')}`;
 
   console.log(`🔑 Client Wallet: ${client.address}`);
   console.log(`🏪 Merchant Wallet: ${merchant.address}`);
