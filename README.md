@@ -91,7 +91,13 @@ If the server landed on a different port (e.g. 3002), pass it to the demo:
 FACILITATOR_PORT=3002 npm run demo -- --network radius-testnet
 ```
 
-The demo client signs an ERC-2612 Permit off-chain, then the facilitator calls `permit()` + `transferFrom()` on-chain to move SBC from Client to Merchant.
+To run against a deployed facilitator instead of a local server:
+
+```bash
+FACILITATOR_URL=https://x402.stablecoin.xyz npm run demo -- --network radius-testnet
+```
+
+The demo client signs an ERC-2612 Permit off-chain (no gas), then the facilitator calls `permit()` + `transferFrom()` on-chain to move SBC from Client → Merchant. The client wallet needs SBC; the facilitator only needs ETH for gas.
 
 ## Development
 
