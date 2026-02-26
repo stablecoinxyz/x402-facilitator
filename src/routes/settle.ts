@@ -201,6 +201,12 @@ export async function settlePayment(req: Request, res: Response) {
       transport: http(networkConfig.rpcUrl),
     });
 
+    // Fetch pending nonce once — use explicitly to avoid stale nonce between permit + transferFrom
+    const pendingNonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: 'pending',
+    });
+
     console.log(`   Executing transfer on ${networkConfig.label}...`);
 
     // Check if we should use real or simulated settlement
@@ -262,7 +268,8 @@ export async function settlePayment(req: Request, res: Response) {
           v,
           r as `0x${string}`,
           s as `0x${string}`
-        ]
+        ],
+        nonce: pendingNonce,
       });
 
       console.log('   ⏳ Waiting for permit confirmation...');
@@ -286,7 +293,8 @@ export async function settlePayment(req: Request, res: Response) {
           owner as `0x${string}`,      // Payer
           recipient as `0x${string}`,  // Merchant
           BigInt(value)
-        ]
+        ],
+        nonce: pendingNonce + 1,
       });
 
       txHash = transferHash;
