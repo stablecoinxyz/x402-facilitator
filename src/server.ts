@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { config } from './config';
+import { apiKeyMiddleware } from './middleware/apiKey';
 import { verifyPayment } from './routes/verify';
 import { settlePayment } from './routes/settle';
 import { getSupportedNetworks } from './routes/supported';
@@ -18,8 +19,8 @@ app.get('/health', (req, res) => {
 
 // x402 Facilitator endpoints
 app.get('/supported', getSupportedNetworks);
-app.post('/verify', verifyPayment);
-app.post('/settle', settlePayment);
+app.post('/verify', apiKeyMiddleware, verifyPayment);
+app.post('/settle', apiKeyMiddleware, settlePayment);
 
 // Start server — try config.port, then increment until an available port is found
 function startServer(port: number) {

@@ -38,6 +38,11 @@ export const config = {
   radiusTestnetSbcTokenAddress: process.env.RADIUS_TESTNET_SBC_TOKEN_ADDRESS || '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb',
   radiusTestnetSbcDecimals: parseInt(process.env.RADIUS_TESTNET_SBC_DECIMALS || '6'),
 
+  // API Key Gating
+  dashboardUrl: process.env.DASHBOARD_URL || 'https://dashboard.stablecoin.xyz',
+  /** Set ENABLE_API_KEY_GATING=false to disable (e.g. for self-hosted deployments) */
+  enableApiKeyGating: process.env.ENABLE_API_KEY_GATING !== 'false',
+
   // Solana Configuration
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   solanaFacilitatorPrivateKey: process.env.SOLANA_FACILITATOR_PRIVATE_KEY || process.env.FACILITATOR_SOLANA_PRIVATE_KEY || '',
