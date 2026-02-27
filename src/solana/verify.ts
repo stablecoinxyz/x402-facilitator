@@ -24,7 +24,7 @@ interface SolanaPaymentPayload {
 }
 
 interface PaymentRequirements {
-  amount: string;
+  maxAmountRequired: string;
   payTo: string;
 }
 
@@ -78,7 +78,7 @@ export async function verifySolanaPayment(
     console.log('   ✅ Deadline valid');
 
     // 3. Check amount
-    if (BigInt(amount) < BigInt(paymentRequirements.amount)) {
+    if (BigInt(amount) < BigInt(paymentRequirements.maxAmountRequired)) {
       console.log('   ❌ Insufficient amount');
       return { isValid: false, payer: from, invalidReason: 'Insufficient amount' };
     }

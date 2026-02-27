@@ -224,7 +224,7 @@ export async function verifyPayment(req: Request, res: Response) {
     console.log('   ✅ Deadline valid');
 
     // Check amount
-    if (BigInt(value) < BigInt(paymentRequirements.amount)) {
+    if (BigInt(value) < BigInt(paymentRequirements.maxAmountRequired)) {
       console.log('   ❌ Insufficient amount');
       return res.json({
         isValid: false,

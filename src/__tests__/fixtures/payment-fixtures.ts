@@ -70,14 +70,14 @@ export function createSolanaPayment(overrides?: Partial<any>) {
 }
 
 /**
- * Create payment requirements (v2 format with `amount` instead of `maxAmountRequired`)
+ * Create payment requirements (x402 v2 spec — uses `maxAmountRequired`)
  */
 export function createPaymentRequirements(network: 'eip155:8453' | 'eip155:84532' | 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp') {
   const requirements: Record<string, any> = {
     'eip155:8453': {
       scheme: 'exact',
       network: 'eip155:8453',
-      amount: '10000000000000000',
+      maxAmountRequired: '10000000000000000',
       payTo: TEST_MERCHANT,
       asset: '0xFdcC3dd6671EaB0709A4C0f3F53De9a333d80798',
       maxTimeoutSeconds: 60,
@@ -86,7 +86,7 @@ export function createPaymentRequirements(network: 'eip155:8453' | 'eip155:84532
     'eip155:84532': {
       scheme: 'exact',
       network: 'eip155:84532',
-      amount: '10000',
+      maxAmountRequired: '10000',
       payTo: TEST_MERCHANT,
       asset: '0xF9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16',
       maxTimeoutSeconds: 60,
@@ -95,7 +95,7 @@ export function createPaymentRequirements(network: 'eip155:8453' | 'eip155:84532
     'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': {
       scheme: 'exact',
       network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-      amount: '50000000',
+      maxAmountRequired: '50000000',
       payTo: '2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K',
       asset: 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
       maxTimeoutSeconds: 60,

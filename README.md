@@ -60,7 +60,7 @@ cp .env.example .env  # configure facilitator keys per network
   "paymentRequirements": {
     "scheme": "exact",
     "network": "eip155:8453",
-    "amount": "10000",
+    "maxAmountRequired": "10000",
     "asset": "0x...",
     "payTo": "0x...",
     "maxTimeoutSeconds": 60,

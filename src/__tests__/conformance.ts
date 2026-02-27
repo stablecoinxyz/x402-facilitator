@@ -78,7 +78,7 @@ const SOLANA_PAYMENT = {
 const EVM_REQUIREMENTS = {
   scheme: 'exact',
   network: 'eip155:8453',
-  amount: '1000000000000000',
+  maxAmountRequired: '1000000000000000',
   payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
   asset: '0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798',
   maxTimeoutSeconds: 300,
@@ -88,7 +88,7 @@ const EVM_REQUIREMENTS = {
 const SOLANA_REQUIREMENTS = {
   scheme: 'exact',
   network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-  amount: '1000000',
+  maxAmountRequired: '1000000',
   payTo: '2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K',
   asset: 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
   maxTimeoutSeconds: 300,
