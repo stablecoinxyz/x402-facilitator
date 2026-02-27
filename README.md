@@ -25,6 +25,21 @@ npm install
 cp .env.example .env  # configure facilitator keys per network
 ```
 
+## API Key (Mainnet)
+
+Mainnet networks (Base, Radius, Solana) require an `X-API-Key` header. Testnet networks are open.
+
+```bash
+curl -X POST https://x402.stablecoin.xyz/verify \
+  -H "X-API-Key: sbc-your-key" \
+  -H "Content-Type: application/json" \
+  -d '{ ... }'
+```
+
+Get a key at [dashboard.stablecoin.xyz](https://dashboard.stablecoin.xyz).
+
+For self-hosted deployments, set `ENABLE_API_KEY_GATING=false` to bypass.
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -105,7 +120,7 @@ The demo client signs an ERC-2612 Permit off-chain (no gas), then the facilitato
 
 ```bash
 npm run dev           # watch mode (auto-restart)
-npm test              # run tests (67 tests)
+npm test              # run tests (76 tests)
 npm run build         # compile TypeScript
 npm start             # production
 fly deploy            # deploy to Fly.io
