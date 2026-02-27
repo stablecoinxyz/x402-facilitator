@@ -233,7 +233,7 @@ describe('POST /settle - x402 V2 Spec Compliance', () => {
           paymentRequirements: createPaymentRequirements('eip155:8453'),
         });
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
       expect(response.body.errorReason).toBeTruthy();
     });
@@ -354,7 +354,7 @@ describe('POST /settle - x402 V2 Spec Compliance', () => {
       const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
       // Should hit catch block because signature.slice() will throw on null
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(200);
       expect(response.body.success).toBe(false);
       expect(response.body.errorReason).toBeTruthy();
     });

@@ -12,7 +12,8 @@
     "demo": "tsx demo/demo-client.ts",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage --silent"
+    "test:coverage": "jest --coverage --silent",
+    "conformance": "tsx src/__tests__/conformance.ts"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.8",

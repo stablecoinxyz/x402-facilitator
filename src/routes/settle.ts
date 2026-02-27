@@ -90,7 +90,7 @@ export async function settlePayment(req: Request, res: Response) {
     console.log('\n💰 Settling payment...');
 
     if (!paymentPayload) {
-      return res.status(500).json({
+      return res.status(400).json({
         success: false,
         payer: 'unknown',
         transaction: '',
@@ -338,7 +338,7 @@ export async function settlePayment(req: Request, res: Response) {
       network = req.body.paymentPayload?.accepted?.network || 'unknown';
     } catch {}
 
-    res.status(500).json({
+    res.status(200).json({
       success: false,
       payer,
       transaction: '',
