@@ -2,7 +2,15 @@
   "name": "x402-facilitator",
   "version": "1.0.0",
   "author": "Stable Coin Inc.",
+  "license": "MIT",
   "description": "SBC x402 Facilitator - Verify and Settle Payments using the x402 protocol",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stablecoinxyz/x402-facilitator.git"
+  },
+  "homepage": "https://github.com/stablecoinxyz/x402-facilitator#readme",
+  "bugs": "https://github.com/stablecoinxyz/x402-facilitator/issues",
+  "keywords": ["x402", "payments", "stablecoin", "sbc", "base", "solana", "facilitator", "http-payments"],
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
