@@ -175,6 +175,9 @@ export async function settlePayment(req: Request, res: Response) {
       throw new Error(`Facilitator private key not configured for ${networkConfig.label}. Set the appropriate env var in .env.`);
     }
 
+    // Radius uses legacy (type 0) transactions — EIP-1559 is rejected.
+    const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
+
     // Build chain object for viem
     const chain = {
       id: networkConfig.chainId,
@@ -206,6 +209,14 @@ export async function settlePayment(req: Request, res: Response) {
       address: account.address,
       blockTag: 'pending',
     });
+
+    // Radius uses legacy (type 0) transactions — EIP-1559 is rejected.
+    // Fetch gas price and add 1 gwei buffer (matches masspay pattern).
+    const gasOverrides: { gasPrice?: bigint } = {};
+    if (isRadius) {
+      gasOverrides.gasPrice = (await publicClient.getGasPrice()) + 1000000000n;
+      console.log(`   ⛽ Radius legacy gasPrice: ${gasOverrides.gasPrice}`);
+    }
 
     console.log(`   Executing transfer on ${networkConfig.label}...`);
 
@@ -270,6 +281,7 @@ export async function settlePayment(req: Request, res: Response) {
           s as `0x${string}`
         ],
         nonce: pendingNonce,
+        ...gasOverrides,
       });
 
       console.log('   ⏳ Waiting for permit confirmation...');
@@ -295,6 +307,7 @@ export async function settlePayment(req: Request, res: Response) {
           BigInt(value)
         ],
         nonce: pendingNonce + 1,
+        ...gasOverrides,
       });
 
       txHash = transferHash;
