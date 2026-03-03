@@ -5,12 +5,16 @@ import { apiKeyMiddleware } from './middleware/apiKey';
 import { verifyPayment } from './routes/verify';
 import { settlePayment } from './routes/settle';
 import { getSupportedNetworks } from './routes/supported';
+import { homePage } from './routes/home';
 
 const app = express();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Home page
+app.get('/', homePage);
 
 // Health check
 app.get('/health', (req, res) => {
