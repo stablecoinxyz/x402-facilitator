@@ -198,10 +198,11 @@ export async function settlePayment(req: Request, res: Response) {
       transport: http(networkConfig.rpcUrl),
     });
 
-    // Create public client
+    // Create public client — use fast polling to minimize receipt wait overhead
     const publicClient = createPublicClient({
       chain,
       transport: http(networkConfig.rpcUrl),
+      pollingInterval: 500,
     });
 
     // Fetch pending nonce once — use explicitly to avoid stale nonce between permit + transferFrom
