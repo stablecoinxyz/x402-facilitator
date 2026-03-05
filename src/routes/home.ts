@@ -573,7 +573,7 @@ export function homePage(_req: Request, res: Response) {
     </p>
 
     <div class="cta-group">
-      <a href="https://docs.stablecoin.xyz" class="btn btn-primary" target="_blank" rel="noopener">
+      <a href="https://docs.stablecoin.xyz/x402/overview" class="btn btn-primary" target="_blank" rel="noopener">
         Read the Docs
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17l9.2-9.2M17 17V7H7"/></svg>
       </a>
@@ -771,7 +771,7 @@ export function homePage(_req: Request, res: Response) {
       <p>
         Built by <a href="https://stablecoin.xyz" target="_blank" rel="noopener">Stablecoin</a>
         &nbsp;&middot;&nbsp;
-        <a href="https://docs.stablecoin.xyz" target="_blank" rel="noopener">Documentation</a>
+        <a href="https://docs.stablecoin.xyz/x402/overview" target="_blank" rel="noopener">Documentation</a>
         &nbsp;&middot;&nbsp;
         <a href="/supported">API Capabilities</a>
       </p>
