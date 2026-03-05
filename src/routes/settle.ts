@@ -293,23 +293,39 @@ export async function settlePayment(req: Request, res: Response) {
       console.log('   ✅ Permit tx:', permitHash);
 
       // Step 2: Call transferFrom() to move tokens to merchant
+      // Retry up to 3 times — RPC nodes may not have the permit tx yet
       console.log('   📝 Step 2: Calling transferFrom()...');
       console.log('      from:', owner);
       console.log('      to:', recipient);
       console.log('      amount:', value);
 
-      const transferHash = await walletClient.writeContract({
-        address: networkConfig.sbcTokenAddress as `0x${string}`,
-        abi: ERC20_PERMIT_ABI,
-        functionName: 'transferFrom',
-        args: [
-          owner as `0x${string}`,      // Payer
-          recipient as `0x${string}`,  // Merchant
-          BigInt(value)
-        ],
-        nonce: pendingNonce + 1,
-        ...gasOverrides,
-      });
+      let transferHash = '' as `0x${string}`;
+      const maxRetries = 3;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          transferHash = await walletClient.writeContract({
+            address: networkConfig.sbcTokenAddress as `0x${string}`,
+            abi: ERC20_PERMIT_ABI,
+            functionName: 'transferFrom',
+            args: [
+              owner as `0x${string}`,      // Payer
+              recipient as `0x${string}`,  // Merchant
+              BigInt(value)
+            ],
+            nonce: pendingNonce + 1,
+            ...gasOverrides,
+          });
+          break;
+        } catch (err: any) {
+          const msg = err?.message || '';
+          if (attempt < maxRetries && msg.includes('insufficient allowance')) {
+            console.log(`   ⚠️  transferFrom attempt ${attempt} failed (allowance not propagated), retrying in 1s...`);
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
+          throw err;
+        }
+      }
 
       txHash = transferHash;
 
