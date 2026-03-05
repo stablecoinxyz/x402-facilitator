@@ -202,7 +202,7 @@ export async function settlePayment(req: Request, res: Response) {
     const publicClient = createPublicClient({
       chain,
       transport: http(networkConfig.rpcUrl),
-      pollingInterval: 500,
+      pollingInterval: 100,
     });
 
     // Fetch pending nonce once — use explicitly to avoid stale nonce between permit + transferFrom
