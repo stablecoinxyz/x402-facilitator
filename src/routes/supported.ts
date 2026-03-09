@@ -18,58 +18,39 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // Collect configured signer addresses keyed by CAIP-2 namespace
   const signers: Record<string, string[]> = {};
 
+  // Helper: push both v2 and v1 kind entries for a network
+  function addKind(network: string, extra: { assetTransferMethod: string; name: string; version: string }) {
+    kinds.push({ x402Version: 2, scheme: 'exact', network, extra });
+    kinds.push({ x402Version: 1, scheme: 'exact', network, extra });
+  }
+
   // Add Base Mainnet if configured
   if (config.baseFacilitatorAddress && config.baseFacilitatorPrivateKey) {
-    kinds.push({
-      x402Version: 2,
-      scheme: 'exact',
-      network: 'eip155:8453',
-      extra: { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' },
-    });
+    addKind('eip155:8453', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
     addSigner(signers, 'eip155:*', config.baseFacilitatorAddress);
   }
 
   // Add Base Sepolia if configured
   if (config.baseSepoliaFacilitatorAddress && config.baseSepoliaFacilitatorPrivateKey) {
-    kinds.push({
-      x402Version: 2,
-      scheme: 'exact',
-      network: 'eip155:84532',
-      extra: { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' },
-    });
+    addKind('eip155:84532', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
     addSigner(signers, 'eip155:*', config.baseSepoliaFacilitatorAddress);
   }
 
   // Add Radius Mainnet if configured
   if (config.radiusFacilitatorAddress && config.radiusFacilitatorPrivateKey) {
-    kinds.push({
-      x402Version: 2,
-      scheme: 'exact',
-      network: 'eip155:723',
-      extra: { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' },
-    });
+    addKind('eip155:723', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
     addSigner(signers, 'eip155:*', config.radiusFacilitatorAddress);
   }
 
   // Add Radius Testnet if configured
   if (config.radiusTestnetFacilitatorAddress && config.radiusTestnetFacilitatorPrivateKey) {
-    kinds.push({
-      x402Version: 2,
-      scheme: 'exact',
-      network: 'eip155:72344',
-      extra: { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' },
-    });
+    addKind('eip155:72344', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
     addSigner(signers, 'eip155:*', config.radiusTestnetFacilitatorAddress);
   }
 
   // Add Solana mainnet if configured
   if (config.solanaFacilitatorAddress && config.solanaFacilitatorPrivateKey) {
-    kinds.push({
-      x402Version: 2,
-      scheme: 'exact',
-      network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-      extra: { assetTransferMethod: 'delegated-spl', name: 'SBC', version: '1' },
-    });
+    addKind('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', { assetTransferMethod: 'delegated-spl', name: 'SBC', version: '1' });
     addSigner(signers, 'solana:*', config.solanaFacilitatorAddress);
   }
 

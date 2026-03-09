@@ -3,6 +3,7 @@ import { createWalletClient, createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { config } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
+import { nonceTracker } from '../protection/nonce-tracker';
 
 /**
  * Payment Settlement Handler - x402 V2 with ERC-2612 Permit
@@ -83,11 +84,77 @@ function resolveEvmNetwork(network: string) {
   return null;
 }
 
+/**
+ * Detect whether an incoming paymentPayload is v1 (flat) or v2 (envelope).
+ */
+function isV1Payload(payload: any): boolean {
+  return payload && !payload.accepted;
+}
+
+/**
+ * Normalize a v1 flat payload into v2 envelope format for settlement.
+ */
+function normalizeV1ToV2(payload: any, requirements: any): any {
+  const network = requirements?.network || 'unknown';
+  const scheme = requirements?.scheme || 'exact';
+
+  const isSolana = network?.startsWith('solana:') ||
+    (payload.from && !payload.from.startsWith('0x'));
+
+  if (isSolana) {
+    return {
+      x402Version: 1,
+      accepted: { scheme, network },
+      payload: {
+        from: payload.from,
+        to: payload.to,
+        amount: payload.amount,
+        nonce: payload.nonce,
+        deadline: payload.deadline,
+        signature: payload.signature,
+      },
+      extensions: {},
+    };
+  }
+
+  const auth = payload.authorization || {
+    from: payload.from,
+    to: payload.to,
+    value: payload.value,
+    validAfter: payload.validAfter || '0',
+    validBefore: payload.validBefore || payload.deadline,
+    nonce: payload.nonce,
+  };
+
+  return {
+    x402Version: 1,
+    accepted: { scheme, network },
+    payload: {
+      signature: payload.signature,
+      authorization: auth,
+    },
+    extensions: {},
+  };
+}
+
+/**
+ * Normalize paymentRequirements: accept both v2 `amount` and v1 `maxAmountRequired`.
+ */
+function normalizeRequirements(req: any): any {
+  if (!req) return req;
+  const normalized = { ...req };
+  if (normalized.amount === undefined && normalized.maxAmountRequired !== undefined) {
+    normalized.amount = normalized.maxAmountRequired;
+  }
+  return normalized;
+}
+
 export async function settlePayment(req: Request, res: Response) {
   try {
-    const { paymentPayload, paymentRequirements } = req.body;
+    let { paymentPayload, paymentRequirements } = req.body;
+    const isV1 = isV1Payload(paymentPayload);
 
-    console.log('\n💰 Settling payment...');
+    console.log(`\n💰 Settling payment (${isV1 ? 'v1' : 'v2'})...`);
 
     if (!paymentPayload) {
       return res.status(400).json({
@@ -98,6 +165,12 @@ export async function settlePayment(req: Request, res: Response) {
         errorReason: 'Missing paymentPayload',
       });
     }
+
+    // Normalize v1 → v2 internally
+    if (isV1) {
+      paymentPayload = normalizeV1ToV2(paymentPayload, paymentRequirements);
+    }
+    paymentRequirements = normalizeRequirements(paymentRequirements);
 
     const network = paymentPayload.accepted?.network;
     const scheme = paymentPayload.accepted?.scheme;
@@ -113,7 +186,7 @@ export async function settlePayment(req: Request, res: Response) {
         payer: paymentPayload.payload?.authorization?.from || 'unknown',
         transaction: '',
         network: network || 'unknown',
-        errorReason: `Unsupported scheme: ${scheme}`
+        errorReason: 'unsupported_scheme'
       });
     }
 
@@ -134,7 +207,7 @@ export async function settlePayment(req: Request, res: Response) {
         payer: paymentPayload.payload?.authorization?.from || 'unknown',
         transaction: '',
         network: network || 'unknown',
-        errorReason: `Unknown network: ${network}`
+        errorReason: 'invalid_network'
       });
     }
 
@@ -150,7 +223,7 @@ export async function settlePayment(req: Request, res: Response) {
         payer: 'unknown',
         transaction: '',
         network,
-        errorReason: 'Missing authorization data in payload'
+        errorReason: 'invalid_payload'
       });
     }
 
@@ -158,7 +231,20 @@ export async function settlePayment(req: Request, res: Response) {
     const spender = authorization.to;
     const value = authorization.value;
     const deadline = authorization.validBefore;
+    const nonce = authorization.nonce;
     const recipient = paymentRequirements.payTo;
+
+    // Nonce replay protection — reject if we've already settled this exact permit
+    if (nonceTracker.hasSettled(network, owner, nonce)) {
+      console.log('   ❌ Nonce already settled (replay rejected)');
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'nonce_already_settled',
+      });
+    }
 
     // Derive v, r, s from compact signature for on-chain permit()
     const r = `0x${signature.slice(2, 66)}` as `0x${string}`;
@@ -171,19 +257,55 @@ export async function settlePayment(req: Request, res: Response) {
     console.log('   Value:', value);
     console.log('   Deadline:', new Date(Number(deadline) * 1000).toISOString());
 
+    // Pre-settle deadline check — don't waste gas on an expired permit
+    const SAFETY_MARGIN_SECONDS = 30;
+    const now = Math.floor(Date.now() / 1000);
+    const deadlineNum = Number(deadline);
+    if (now > deadlineNum) {
+      console.log('   ❌ Permit already expired');
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'permit_expired',
+        expiredAt: deadlineNum,
+        suggestRetry: true,
+      });
+    }
+    if (deadlineNum - now < SAFETY_MARGIN_SECONDS) {
+      console.log(`   ❌ Permit expires in ${deadlineNum - now}s (within ${SAFETY_MARGIN_SECONDS}s safety margin)`);
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'permit_expired',
+        expiredAt: deadlineNum,
+        remainingSeconds: deadlineNum - now,
+        suggestRetry: true,
+      });
+    }
+    console.log(`   ✅ Permit deadline OK (${deadlineNum - now}s remaining)`);
+
     if (!networkConfig.privateKey) {
       throw new Error(`Facilitator private key not configured for ${networkConfig.label}. Set the appropriate env var in .env.`);
     }
 
-    // Radius uses legacy (type 0) transactions — EIP-1559 is rejected.
+    // Radius uses RUSD as native gas token with Turnstile auto-conversion from SBC.
+    // Radius supports both legacy and EIP-1559 txs, BUT viem's default EIP-1559
+    // sets maxPriorityFeePerGas=0 which Radius rejects as "gas price too low."
+    // We use legacy (type 0) with explicit gasPrice — simpler and proven on mainnet.
+    // eth_estimateGas is broken on Radius regardless of tx type (Turnstile issue).
+    // Base: EIP-1559 tx (type 2) — viem default when no gasPrice override.
     const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
 
-    // Build chain object for viem
+    // Build chain object for viem — Radius uses RUSD as native gas token
     const chain = {
       id: networkConfig.chainId,
       name: networkConfig.label,
       network,
-      nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' },
+      nativeCurrency: { decimals: 18, name: 'RUSD', symbol: 'RUSD' },
       rpcUrls: { default: { http: [networkConfig.rpcUrl] } },
       testnet: networkConfig.testnet,
     };
@@ -211,8 +333,10 @@ export async function settlePayment(req: Request, res: Response) {
       blockTag: 'pending',
     });
 
-    // Radius uses legacy (type 0) transactions — EIP-1559 is rejected.
-    // Fetch gas price and add 1 gwei buffer (matches masspay pattern).
+    // Passing gasPrice forces viem to send type 0 (legacy) tx for Radius.
+    // Without it, viem sends type 2 (EIP-1559) with maxPriorityFeePerGas=0,
+    // which Radius rejects. EIP-1559 works with explicit non-zero fees, but
+    // legacy is simpler and proven.
     const gasOverrides: { gasPrice?: bigint } = {};
     if (isRadius) {
       gasOverrides.gasPrice = (await publicClient.getGasPrice()) + 1000000000n;
@@ -260,6 +384,42 @@ export async function settlePayment(req: Request, res: Response) {
       ] as const;
 
       console.log('   Token:', networkConfig.sbcTokenAddress);
+
+      // Gas estimation dry-run — catch reverts before wasting gas.
+      // Skip for Radius: eth_estimateGas always returns "Exec Failed" on Radius
+      // due to Turnstile/RUSD fee abstraction (tested both legacy & EIP-1559).
+      if (!isRadius) {
+        console.log('   ⛽ Estimating gas for permit()...');
+        try {
+          await publicClient.estimateContractGas({
+            address: networkConfig.sbcTokenAddress as `0x${string}`,
+            abi: ERC20_PERMIT_ABI,
+            functionName: 'permit',
+            args: [
+              owner as `0x${string}`,
+              spender as `0x${string}`,
+              BigInt(value),
+              BigInt(deadline),
+              v,
+              r as `0x${string}`,
+              s as `0x${string}`
+            ],
+            account: account.address,
+          });
+          console.log('   ✅ Gas estimation passed');
+        } catch (gasError: any) {
+          console.log('   ❌ Gas estimation failed:', gasError.message);
+          return res.json({
+            success: false,
+            payer: owner,
+            transaction: '',
+            network,
+            errorReason: `gas_estimation_failed: ${gasError.message}`,
+          });
+        }
+      } else {
+        console.log('   ⏭️  Skipping gas estimation (Radius fee abstraction incompatible)');
+      }
 
       // Step 1: Call permit() to approve the facilitator
       console.log('   📝 Step 1: Calling permit()...');
@@ -349,6 +509,9 @@ export async function settlePayment(req: Request, res: Response) {
       console.log('   ✅ Simulated tx hash:', txHash);
       console.log('✅ Simulated settlement complete!\n');
     }
+
+    // Mark nonce as settled to prevent replay
+    nonceTracker.markSettled(network, owner, nonce);
 
     res.json({
       success: true,

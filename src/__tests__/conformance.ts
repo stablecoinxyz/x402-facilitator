@@ -78,7 +78,7 @@ const SOLANA_PAYMENT = {
 const EVM_REQUIREMENTS = {
   scheme: 'exact',
   network: 'eip155:8453',
-  maxAmountRequired: '1000000000000000',
+  amount: '1000000000000000',
   payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
   asset: '0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798',
   maxTimeoutSeconds: 300,
@@ -88,7 +88,7 @@ const EVM_REQUIREMENTS = {
 const SOLANA_REQUIREMENTS = {
   scheme: 'exact',
   network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-  maxAmountRequired: '1000000',
+  amount: '1000000',
   payTo: '2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K',
   asset: 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
   maxTimeoutSeconds: 300,
@@ -116,8 +116,14 @@ async function testSupported() {
   const kinds: any[] = body?.kinds ?? [];
   kinds.length > 0 ? pass('kinds[] is non-empty') : fail('kinds[] is non-empty', 'empty array');
 
-  const allV2 = kinds.every((k: any) => k.x402Version === 2);
-  allV2 ? pass('all kinds have x402Version: 2') : fail('all kinds have x402Version: 2', 'some missing');
+  const allVersioned = kinds.every((k: any) => k.x402Version === 1 || k.x402Version === 2);
+  allVersioned ? pass('all kinds have x402Version 1 or 2') : fail('all kinds have x402Version 1 or 2', 'some missing');
+
+  const hasV2 = kinds.some((k: any) => k.x402Version === 2);
+  hasV2 ? pass('has v2 kinds') : fail('has v2 kinds', 'no v2 entries');
+
+  const hasV1 = kinds.some((k: any) => k.x402Version === 1);
+  hasV1 ? pass('has v1 kinds (backward compat)') : fail('has v1 kinds (backward compat)', 'no v1 entries');
 
   const allExact = kinds.every((k: any) => k.scheme === 'exact');
   allExact ? pass('all kinds use scheme: "exact"') : fail('all kinds use scheme: "exact"', 'some differ');

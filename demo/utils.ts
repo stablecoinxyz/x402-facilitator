@@ -87,10 +87,15 @@ export function getNetwork(): NetworkConfig {
 /** Create a viem chain object for a network config */
 function toViemChain(network: NetworkConfig) {
   if (network.cliName === "base") return base;
+  // Radius uses RUSD as native gas token (with Turnstile auto-conversion from SBC)
+  const isRadius = network.cliName === "radius" || network.cliName === "radius-testnet";
+  const nativeCurrency = isRadius
+    ? { name: "RUSD", symbol: "RUSD", decimals: 18 }
+    : { name: "Ether", symbol: "ETH", decimals: 18 };
   return defineChain({
     id: network.chainId,
     name: network.name,
-    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    nativeCurrency,
     rpcUrls: {
       default: { http: [network.rpcUrl] },
     },

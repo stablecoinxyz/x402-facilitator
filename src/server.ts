@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { config } from './config';
 import { apiKeyMiddleware } from './middleware/apiKey';
+import { createRateLimiter } from './protection/rate-limiter';
+import { createSizeLimiter } from './protection/size-limiter';
 import { verifyPayment } from './routes/verify';
 import { settlePayment } from './routes/settle';
 import { getSupportedNetworks } from './routes/supported';
@@ -11,7 +13,18 @@ const app = express();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(createSizeLimiter('100kb'));
+
+// Rate limiting: 60 requests per minute per IP on payment endpoints
+const paymentRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+
+// Payload too large error handler
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'payload_too_large' });
+  }
+  next(err);
+});
 
 // Home page
 app.get('/', homePage);
@@ -23,8 +36,8 @@ app.get('/health', (req, res) => {
 
 // x402 Facilitator endpoints
 app.get('/supported', getSupportedNetworks);
-app.post('/verify', apiKeyMiddleware, verifyPayment);
-app.post('/settle', apiKeyMiddleware, settlePayment);
+app.post('/verify', paymentRateLimiter, apiKeyMiddleware, verifyPayment);
+app.post('/settle', paymentRateLimiter, apiKeyMiddleware, settlePayment);
 
 // Start server — try config.port, then increment until an available port is found
 function startServer(port: number) {

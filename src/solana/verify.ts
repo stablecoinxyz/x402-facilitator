@@ -24,7 +24,8 @@ interface SolanaPaymentPayload {
 }
 
 interface PaymentRequirements {
-  maxAmountRequired: string;
+  amount: string;
+  maxAmountRequired?: string; // v1 compat
   payTo: string;
 }
 
@@ -59,28 +60,29 @@ export async function verifySolanaPayment(
 
       if (!isValidSig) {
         console.log('   ❌ Invalid Solana signature');
-        return { isValid: false, payer: from, invalidReason: 'Invalid signature' };
+        return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_signature' };
       }
 
       console.log('   ✅ Signature valid (Ed25519)');
     } catch (error: any) {
       console.log('   ❌ Signature verification failed:', error.message);
-      return { isValid: false, payer: from, invalidReason: 'Signature verification failed' };
+      return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_signature' };
     }
 
     // 2. Check deadline
     const now = Math.floor(Date.now() / 1000);
     if (now > deadline) {
       console.log('   ❌ Payment expired');
-      return { isValid: false, payer: from, invalidReason: 'Payment expired' };
+      return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_authorization_valid_before' };
     }
 
     console.log('   ✅ Deadline valid');
 
     // 3. Check amount
-    if (BigInt(amount) < BigInt(paymentRequirements.maxAmountRequired)) {
+    const requiredAmount = paymentRequirements.amount ?? paymentRequirements.maxAmountRequired ?? '0';
+    if (BigInt(amount) < BigInt(requiredAmount)) {
       console.log('   ❌ Insufficient amount');
-      return { isValid: false, payer: from, invalidReason: 'Insufficient amount' };
+      return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_authorization_value_mismatch' };
     }
 
     console.log('   ✅ Amount sufficient');
@@ -88,7 +90,7 @@ export async function verifySolanaPayment(
     // 4. Check recipient
     if (to.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {
       console.log('   ❌ Invalid recipient');
-      return { isValid: false, payer: from, invalidReason: 'Invalid recipient' };
+      return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_recipient_mismatch' };
     }
 
     console.log('   ✅ Recipient valid');
@@ -114,7 +116,7 @@ export async function verifySolanaPayment(
 
       if (balance < BigInt(amount)) {
         console.log('   ❌ Insufficient SBC balance');
-        return { isValid: false, payer: from, invalidReason: 'Insufficient SBC balance' };
+        return { isValid: false, payer: from, invalidReason: 'insufficient_funds' };
       }
 
       console.log('   ✅ Balance sufficient');

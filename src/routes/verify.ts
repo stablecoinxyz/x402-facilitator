@@ -77,11 +77,97 @@ function resolveEvmNetwork(network: string) {
   return null;
 }
 
+/** Resolve facilitator address for a given CAIP-2 EVM network */
+function resolveEvmFacilitatorAddress(network: string): string | null {
+  const chainId = parseEvmChainId(network);
+  if (chainId === null) return null;
+  if (chainId === config.baseChainId) return config.baseFacilitatorAddress;
+  if (chainId === config.baseSepoliaChainId) return config.baseSepoliaFacilitatorAddress;
+  if (chainId === config.radiusChainId) return config.radiusFacilitatorAddress;
+  if (chainId === config.radiusTestnetChainId) return config.radiusTestnetFacilitatorAddress;
+  return null;
+}
+
+/**
+ * Detect whether an incoming paymentPayload is v1 (flat) or v2 (envelope).
+ * v2 payloads have `accepted.scheme` and `accepted.network`.
+ * v1 payloads have a flat structure with no `accepted` envelope.
+ */
+function isV1Payload(payload: any): boolean {
+  return payload && !payload.accepted;
+}
+
+/**
+ * Normalize a v1 flat payload into v2 envelope format.
+ * v1 payloads carry scheme/network at the top level or in paymentRequirements.
+ */
+function normalizeV1ToV2(payload: any, requirements: any): any {
+  // v1 EVM payloads have signature + authorization at top level
+  // v1 Solana payloads have from/to/amount/signature at top level
+  const network = requirements?.network || 'unknown';
+  const scheme = requirements?.scheme || 'exact';
+
+  // Check if this looks like a Solana payload (has `from` as base58, not 0x)
+  const isSolana = network?.startsWith('solana:') ||
+    (payload.from && !payload.from.startsWith('0x'));
+
+  if (isSolana) {
+    return {
+      x402Version: 1,
+      accepted: { scheme, network },
+      payload: {
+        from: payload.from,
+        to: payload.to,
+        amount: payload.amount,
+        nonce: payload.nonce,
+        deadline: payload.deadline,
+        signature: payload.signature,
+      },
+      extensions: {},
+    };
+  }
+
+  // EVM: v1 may have authorization nested or flat
+  const auth = payload.authorization || {
+    from: payload.from,
+    to: payload.to,
+    value: payload.value,
+    validAfter: payload.validAfter || '0',
+    validBefore: payload.validBefore || payload.deadline,
+    nonce: payload.nonce,
+  };
+
+  return {
+    x402Version: 1,
+    accepted: { scheme, network },
+    payload: {
+      signature: payload.signature,
+      authorization: auth,
+    },
+    extensions: {},
+  };
+}
+
+/**
+ * Normalize paymentRequirements: accept both v2 `amount` and v1 `maxAmountRequired`.
+ * Internally we use `amount`.
+ */
+function normalizeRequirements(req: any): any {
+  if (!req) return req;
+  const normalized = { ...req };
+  // Accept both field names, prefer `amount` if both present
+  if (normalized.amount === undefined && normalized.maxAmountRequired !== undefined) {
+    normalized.amount = normalized.maxAmountRequired;
+  }
+  return normalized;
+}
+
 export async function verifyPayment(req: Request, res: Response) {
   try {
-    const { paymentPayload, paymentRequirements } = req.body;
+    let { paymentPayload, paymentRequirements } = req.body;
+    const isV1 = isV1Payload(paymentPayload);
 
-    console.log('\n🔍 Verifying payment (x402 V2)...');
+    console.log(`\n🔍 Verifying payment (x402 ${isV1 ? 'V1' : 'V2'})...`);
 
     if (!paymentPayload) {
       return res.status(500).json({
@@ -90,6 +176,12 @@ export async function verifyPayment(req: Request, res: Response) {
         invalidReason: 'Missing paymentPayload',
       });
     }
+
+    // Normalize v1 → v2 internally
+    if (isV1) {
+      paymentPayload = normalizeV1ToV2(paymentPayload, paymentRequirements);
+    }
+    paymentRequirements = normalizeRequirements(paymentRequirements);
 
     const network = paymentPayload.accepted?.network;
     const scheme = paymentPayload.accepted?.scheme;
@@ -103,7 +195,7 @@ export async function verifyPayment(req: Request, res: Response) {
       return res.json({
         isValid: false,
         payer: paymentPayload.payload?.authorization?.from || 'unknown',
-        invalidReason: `Unsupported scheme: ${scheme}`
+        invalidReason: 'unsupported_scheme'
       });
     }
 
@@ -122,7 +214,7 @@ export async function verifyPayment(req: Request, res: Response) {
       return res.json({
         isValid: false,
         payer: paymentPayload.payload?.authorization?.from || 'unknown',
-        invalidReason: `Unknown network: ${network}`
+        invalidReason: 'invalid_network'
       });
     }
 
@@ -136,7 +228,7 @@ export async function verifyPayment(req: Request, res: Response) {
       return res.json({
         isValid: false,
         payer: 'unknown',
-        invalidReason: 'Missing authorization data in payload'
+        invalidReason: 'invalid_payload'
       });
     }
 
@@ -158,7 +250,7 @@ export async function verifyPayment(req: Request, res: Response) {
       id: networkConfig.chainId,
       name: networkConfig.label,
       network,
-      nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' },
+      nativeCurrency: { decimals: 18, name: 'RUSD', symbol: 'RUSD' },
       rpcUrls: { default: { http: [networkConfig.rpcUrl] } },
       testnet: networkConfig.label.includes('Sepolia') || networkConfig.label.includes('Testnet'),
     };
@@ -196,7 +288,7 @@ export async function verifyPayment(req: Request, res: Response) {
         return res.json({
           isValid: false,
           payer: owner,
-          invalidReason: 'Invalid permit signature'
+          invalidReason: 'invalid_exact_evm_payload_signature'
         });
       }
 
@@ -206,34 +298,57 @@ export async function verifyPayment(req: Request, res: Response) {
       return res.json({
         isValid: false,
         payer: owner,
-        invalidReason: 'Permit signature verification failed'
+        invalidReason: 'invalid_exact_evm_payload_signature'
       });
     }
 
-    // Check deadline
+    // Check time window — validAfter and validBefore (spec step 4)
     const now = Math.floor(Date.now() / 1000);
+    const validAfter = Number(authorization.validAfter || '0');
+    if (now < validAfter) {
+      console.log('   ❌ Permit not yet valid (validAfter in the future)');
+      return res.json({
+        isValid: false,
+        payer: owner,
+        invalidReason: 'invalid_exact_evm_payload_authorization_valid_after'
+      });
+    }
+
     if (now > Number(deadline)) {
       console.log('   ❌ Permit expired');
       return res.json({
         isValid: false,
         payer: owner,
-        invalidReason: 'Permit expired'
+        invalidReason: 'invalid_exact_evm_payload_authorization_valid_before'
       });
     }
 
-    console.log('   ✅ Deadline valid');
+    console.log('   ✅ Time window valid');
 
-    // Check amount
-    if (BigInt(value) < BigInt(paymentRequirements.maxAmountRequired)) {
+    // Check amount (spec step 3)
+    if (BigInt(value) < BigInt(paymentRequirements.amount)) {
       console.log('   ❌ Insufficient amount');
       return res.json({
         isValid: false,
         payer: owner,
-        invalidReason: 'Insufficient amount'
+        invalidReason: 'invalid_exact_evm_payload_authorization_value_mismatch'
       });
     }
 
     console.log('   ✅ Amount sufficient');
+
+    // Check spender matches our facilitator address (spec step 5)
+    const facilitatorAddress = resolveEvmFacilitatorAddress(network);
+    if (facilitatorAddress && spender.toLowerCase() !== facilitatorAddress.toLowerCase()) {
+      console.log('   ❌ Spender does not match facilitator');
+      return res.json({
+        isValid: false,
+        payer: owner,
+        invalidReason: 'invalid_exact_evm_payload_recipient_mismatch'
+      });
+    }
+
+    console.log('   ✅ Spender valid');
 
     // Check recipient
     if (recipient.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {
@@ -241,7 +356,7 @@ export async function verifyPayment(req: Request, res: Response) {
       return res.json({
         isValid: false,
         payer: owner,
-        invalidReason: 'Invalid recipient'
+        invalidReason: 'invalid_exact_evm_payload_recipient_mismatch'
       });
     }
 
@@ -280,18 +395,20 @@ export async function verifyPayment(req: Request, res: Response) {
       return res.json({
         isValid: false,
         payer: owner,
-        invalidReason: 'Insufficient balance'
+        invalidReason: 'insufficient_funds'
       });
     }
 
     console.log('   ✅ Balance sufficient');
 
     // All checks passed
-    console.log('✅ Payment verification successful!\n');
+    const remainingSeconds = Number(deadline) - Math.floor(Date.now() / 1000);
+    console.log(`✅ Payment verification successful! (${remainingSeconds}s until permit expires)\n`);
     res.json({
       isValid: true,
       payer: owner,
-      invalidReason: null
+      invalidReason: null,
+      remainingSeconds,
     });
 
   } catch (error: any) {

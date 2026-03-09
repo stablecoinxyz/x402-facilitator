@@ -35,7 +35,7 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       expect(typeof response.body.signers).toBe('object');
     });
 
-    it('should return array of supported payment kinds with v2 fields', async () => {
+    it('should return array of supported payment kinds with required fields', async () => {
       const response = await request(app).get('/supported');
 
       expect(Array.isArray(response.body.kinds)).toBe(true);
@@ -46,7 +46,7 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
         expect(kind).toHaveProperty('network');
         expect(kind).toHaveProperty('extra');
 
-        expect(kind.x402Version).toBe(2);
+        expect([1, 2]).toContain(kind.x402Version);
         expect(kind.scheme).toBe('exact');
         expect(typeof kind.network).toBe('string');
         expect(typeof kind.extra).toBe('object');
@@ -92,52 +92,43 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
   });
 
   describe('Capability Discovery', () => {
-    it('should include Base mainnet with CAIP-2 if configured', async () => {
+    it('should include Base mainnet with CAIP-2 if configured (v1 + v2)', async () => {
       const response = await request(app).get('/supported');
 
-      const hasBase = response.body.kinds?.some(
+      const baseKinds = response.body.kinds?.filter(
         (k: any) => k.network === 'eip155:8453' && k.scheme === 'exact'
       );
 
-      if (hasBase) {
-        const baseKind = response.body.kinds.find(
-          (k: any) => k.network === 'eip155:8453'
-        );
-        expect(baseKind.x402Version).toBe(2);
-        expect(baseKind.scheme).toBe('exact');
-        expect(baseKind.extra.assetTransferMethod).toBe('erc2612');
+      if (baseKinds?.length > 0) {
+        const versions = baseKinds.map((k: any) => k.x402Version).sort();
+        expect(versions).toEqual([1, 2]);
+        expect(baseKinds[0].extra.assetTransferMethod).toBe('erc2612');
       }
     });
 
-    it('should include Base Sepolia with CAIP-2 if configured', async () => {
+    it('should include Base Sepolia with CAIP-2 if configured (v1 + v2)', async () => {
       const response = await request(app).get('/supported');
 
-      const hasBaseSepolia = response.body.kinds?.some(
+      const sepoliaKinds = response.body.kinds?.filter(
         (k: any) => k.network === 'eip155:84532' && k.scheme === 'exact'
       );
 
-      if (hasBaseSepolia) {
-        const baseSepoliaKind = response.body.kinds.find(
-          (k: any) => k.network === 'eip155:84532'
-        );
-        expect(baseSepoliaKind.x402Version).toBe(2);
-        expect(baseSepoliaKind.scheme).toBe('exact');
+      if (sepoliaKinds?.length > 0) {
+        const versions = sepoliaKinds.map((k: any) => k.x402Version).sort();
+        expect(versions).toEqual([1, 2]);
       }
     });
 
-    it('should include Solana mainnet with CAIP-2 if configured', async () => {
+    it('should include Solana mainnet with CAIP-2 if configured (v1 + v2)', async () => {
       const response = await request(app).get('/supported');
 
-      const hasSolana = response.body.kinds?.some(
+      const solanaKinds = response.body.kinds?.filter(
         (k: any) => k.network === 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' && k.scheme === 'exact'
       );
 
-      if (hasSolana) {
-        const solanaKind = response.body.kinds.find(
-          (k: any) => k.network === 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
-        );
-        expect(solanaKind.x402Version).toBe(2);
-        expect(solanaKind.scheme).toBe('exact');
+      if (solanaKinds?.length > 0) {
+        const versions = solanaKinds.map((k: any) => k.x402Version).sort();
+        expect(versions).toEqual([1, 2]);
       }
     });
   });
@@ -199,11 +190,11 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       });
     });
 
-    it('should use x402Version 2', async () => {
+    it('should use x402Version 1 or 2', async () => {
       const response = await request(app).get('/supported');
 
       response.body.kinds?.forEach((kind: any) => {
-        expect(kind.x402Version).toBe(2);
+        expect([1, 2]).toContain(kind.x402Version);
       });
     });
   });
