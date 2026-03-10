@@ -1,0 +1,37 @@
+# Grafana Alert Rules for x402 Facilitator
+#
+# Import manually via Grafana UI:
+#   Alerts & IRM → Alert rules → + New alert rule
+#
+# These are reference definitions — copy the PromQL expressions into the Grafana alert rule builder.
+
+rules:
+  - name: Settle error rate high
+    condition: >
+      sum(rate(x402_settle_total{result=~"error|failed"}[5m]))
+      /
+      sum(rate(x402_settle_total[5m]))
+      > 0.1
+    for: 5m
+    severity: critical
+    summary: "Settle error rate > 10% for 5 minutes"
+    action: "Check fly logs -a sbc-x402-facilitator for error details"
+
+  - name: Permit expired attempts
+    condition: >
+      sum(increase(x402_settle_total{result="expired"}[5m])) > 0
+    for: 0m
+    severity: warning
+    summary: "Settle attempts with expired permits detected"
+    action: "Check if SDK clients are using too-short permit durations"
+
+  - name: Health check down
+    type: loki
+    condition: >
+      absent_over_time(
+        {app="sbc-x402-facilitator"} | json | msg="Facilitator started" [10m]
+      )
+    for: 5m
+    severity: critical
+    summary: "No facilitator logs received in 10 minutes"
+    action: "Check fly status -a sbc-x402-facilitator"

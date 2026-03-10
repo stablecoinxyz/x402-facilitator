@@ -105,11 +105,78 @@ FACILITATOR_URL=https://x402.stablecoin.xyz npm run demo -- --network radius-tes
 
 The demo client signs an ERC-2612 Permit off-chain (no gas), then the facilitator calls `permit()` + `transferFrom()` on-chain to move SBC from Client → Merchant. The client wallet needs SBC; the facilitator only needs ETH for gas.
 
+## Observability
+
+Structured JSON logging (Pino) with request correlation via `X-Request-ID` header. Prometheus metrics on `/metrics`.
+
+### Logs
+
+Logs ship to Grafana Cloud Loki via [sbc-log-shipper](https://github.com/stablecoinxyz/fly-log-shipper). Locally:
+
+```bash
+npm run dev | npx pino-pretty
+```
+
+Set `LOG_LEVEL` env var to control verbosity (`debug`, `info`, `warn`, `error`). Default: `info`.
+
+### Metrics
+
+`/metrics` exposes Prometheus metrics, protected by `METRICS_TOKEN` env var (bearer auth). Returns 404 if unset.
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `x402_verify_total` | Counter | `network`, `result` (valid/invalid/error) |
+| `x402_settle_total` | Counter | `network`, `result` (success/failed/replay/expired/error) |
+| `x402_verify_duration_seconds` | Histogram | `network` |
+| `x402_settle_duration_seconds` | Histogram | `network` |
+| Default process metrics | — | CPU, memory, event loop lag |
+
+```bash
+# Local test
+METRICS_TOKEN=test npm run dev
+curl localhost:3001/metrics -H "Authorization: Bearer test"
+```
+
+### Grafana Cloud
+
+- **Stack**: `sbclogs.grafana.net`
+- **Loki** (logs): query with `{app="sbc-x402-facilitator"} | json`
+- **Prometheus** (metrics): scrapes `/metrics` via Fly.io `[metrics]` in fly.toml
+
+Example LogQL queries:
+```
+# All settle errors on Base
+{app="sbc-x402-facilitator"} | json | action="settle" | level="error" | network="eip155:8453"
+
+# Trace a request
+{app="sbc-x402-facilitator"} | json | requestId="<uuid>"
+```
+
+Example PromQL queries:
+```
+# Settle success rate (5m window)
+sum(rate(x402_settle_total{result="success"}[5m])) / sum(rate(x402_settle_total[5m]))
+
+# Verify latency p95
+histogram_quantile(0.95, rate(x402_verify_duration_seconds_bucket[5m]))
+
+# Settle errors by network
+sum by (network) (rate(x402_settle_total{result=~"error|failed"}[5m]))
+```
+
+### Alert rules (Grafana)
+
+| Alert | Condition |
+|-------|-----------|
+| Settle error rate high | `x402_settle_total{result=~"error\|failed"}` > 10% over 5min |
+| Permit expired attempts | `x402_settle_total{result="expired"}` > 0 |
+| Health down | `/health` unreachable |
+
 ## Development
 
 ```bash
 npm run dev           # watch mode (auto-restart)
-npm test              # run tests (76 tests)
+npm test              # run tests (178 tests)
 npm run build         # compile TypeScript
 npm start             # production
 fly deploy            # deploy to Fly.io
