@@ -25,6 +25,10 @@ primary_region = 'iad'
     method = 'GET'
     path = '/health'
 
+[metrics]
+  port = 3001
+  path = '/metrics'
+
 [[vm]]
   memory = '256mb'
   cpu_kind = 'shared'

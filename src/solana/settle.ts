@@ -19,7 +19,9 @@ import {
   createTransferInstruction,
 } from '@solana/spl-token';
 import bs58 from 'bs58';
+import type { Logger } from 'pino';
 import { config } from '../config';
+import logger from '../lib/logger';
 
 interface SolanaPaymentPayload {
   from: string;      // Base58 public key (payer)
@@ -37,15 +39,13 @@ interface SolanaPaymentPayload {
  * - Same pattern as Base ERC-20 transferFrom()
  */
 export async function settleSolanaPayment(
-  paymentPayload: SolanaPaymentPayload
+  paymentPayload: SolanaPaymentPayload,
+  log: Logger = logger,
 ): Promise<{ success: boolean; payer: string; transaction: string; network: string; errorReason?: string }> {
   try {
     const { from, to, amount } = paymentPayload;
 
-    console.log('   💳 DELEGATED TRANSFER (Non-Custodial)');
-    console.log('   From (Agent):', from);
-    console.log('   To (Merchant):', to);
-    console.log('   Amount:', amount, `(${Number(amount) / 1e9} SBC)`);
+    log.debug({ from, to, amount, amountSBC: Number(amount) / 1e9 }, 'Delegated transfer (non-custodial)');
 
     // Create connection
     const connection = new Connection(config.solanaRpcUrl, 'confirmed');
@@ -58,7 +58,7 @@ export async function settleSolanaPayment(
     const secretKey = bs58.decode(config.solanaFacilitatorPrivateKey);
     const facilitatorKeypair = Keypair.fromSecretKey(secretKey);
 
-    console.log('   Facilitator (Delegate):', facilitatorKeypair.publicKey.toBase58());
+    log.debug({ facilitator: facilitatorKeypair.publicKey.toBase58() }, 'Facilitator (delegate)');
 
     // Parse addresses
     const fromPublicKey = new PublicKey(from);
@@ -76,11 +76,9 @@ export async function settleSolanaPayment(
       toPublicKey
     );
 
-    console.log('   From token account:', fromTokenAccount.toBase58());
-    console.log('   To token account:', toTokenAccount.toBase58());
+    log.debug({ fromTokenAccount: fromTokenAccount.toBase58(), toTokenAccount: toTokenAccount.toBase58() }, 'Token accounts');
 
     // Create transfer instruction using FACILITATOR as authority (delegate)
-    // This works because agent has pre-approved facilitator as delegate
     const transferInstruction = createTransferInstruction(
       fromTokenAccount,                 // Source (agent's token account)
       toTokenAccount,                   // Destination (merchant's token account)
@@ -96,7 +94,7 @@ export async function settleSolanaPayment(
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = facilitatorKeypair.publicKey;
 
-    console.log('   ⏳ Sending delegated transfer transaction...');
+    log.debug('Sending delegated transfer transaction');
 
     // Sign and send transaction (facilitator signs as delegate)
     const signature = await sendAndConfirmTransaction(
@@ -106,10 +104,7 @@ export async function settleSolanaPayment(
       { commitment: 'confirmed' }
     );
 
-    console.log('   ✅ Transaction confirmed:', signature);
-    console.log('   🔗 Explorer:', `https://orb.helius.dev/tx/${signature}?cluster=mainnet-beta&tab=summary`);
-    console.log('   💡 Tokens flowed: Agent → Merchant (facilitator never held funds)');
-    console.log('✅ Delegated settlement complete!\n');
+    log.info({ txHash: signature, payer: from, to }, 'Delegated settlement complete');
 
     return {
       success: true,
@@ -118,10 +113,7 @@ export async function settleSolanaPayment(
       network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
     };
   } catch (error: any) {
-    console.error('❌ Solana settlement error:', error);
-    console.error('   💡 If error mentions "insufficient funds" or "owner mismatch", the agent needs to:');
-    console.error('   1. Approve facilitator as delegate: npm run approve-solana-facilitator');
-    console.error('   2. Ensure agent has sufficient SBC token balance');
+    log.error({ err: error, payer: paymentPayload.from }, 'Solana settlement error');
     return {
       success: false,
       payer: paymentPayload.from || 'unknown',
@@ -131,4 +123,3 @@ export async function settleSolanaPayment(
     };
   }
 }
-

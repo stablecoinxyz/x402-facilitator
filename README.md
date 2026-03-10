@@ -25,20 +25,9 @@ npm install
 cp .env.example .env  # configure facilitator keys per network
 ```
 
-## API Key (Mainnet)
+## Authentication
 
-Mainnet networks (Base, Radius, Solana) require an `X-API-Key` header. Testnet networks are open.
-
-```bash
-curl -X POST https://x402.stablecoin.xyz/verify \
-  -H "X-API-Key: sbc-your-key" \
-  -H "Content-Type: application/json" \
-  -d '{ ... }'
-```
-
-Get a key at [dashboard.stablecoin.xyz](https://dashboard.stablecoin.xyz).
-
-For self-hosted deployments, set `ENABLE_API_KEY_GATING=false` to bypass.
+The facilitator is permissionless — no API key needed. Rate limiting is applied to payment endpoints.
 
 ## API Endpoints
 

@@ -1,7 +1,10 @@
 import { Request, Response } from 'express';
 import { createPublicClient, http, verifyTypedData } from 'viem';
+import type { Logger } from 'pino';
 import { config } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
+import { verifyTotal, verifyDuration } from '../lib/metrics';
+import logger from '../lib/logger';
 
 /**
  * Payment Verification Handler - x402 V2 with ERC-2612 Permit
@@ -37,7 +40,6 @@ function resolveEvmNetwork(network: string) {
   if (chainId === config.baseChainId) {
     return {
       label: 'Base Mainnet',
-      emoji: '🔵',
       chainId: config.baseChainId,
       rpcUrl: config.baseRpcUrl,
       sbcTokenAddress: config.baseSbcTokenAddress,
@@ -47,7 +49,6 @@ function resolveEvmNetwork(network: string) {
   if (chainId === config.baseSepoliaChainId) {
     return {
       label: 'Base Sepolia',
-      emoji: '🔵',
       chainId: config.baseSepoliaChainId,
       rpcUrl: config.baseSepoliaRpcUrl,
       sbcTokenAddress: config.baseSepoliaSbcTokenAddress,
@@ -57,7 +58,6 @@ function resolveEvmNetwork(network: string) {
   if (chainId === config.radiusChainId) {
     return {
       label: 'Radius Mainnet',
-      emoji: '🟢',
       chainId: config.radiusChainId,
       rpcUrl: config.radiusRpcUrl,
       sbcTokenAddress: config.radiusSbcTokenAddress,
@@ -67,7 +67,6 @@ function resolveEvmNetwork(network: string) {
   if (chainId === config.radiusTestnetChainId) {
     return {
       label: 'Radius Testnet',
-      emoji: '🟢',
       chainId: config.radiusTestnetChainId,
       rpcUrl: config.radiusTestnetRpcUrl,
       sbcTokenAddress: config.radiusTestnetSbcTokenAddress,
@@ -163,13 +162,18 @@ function normalizeRequirements(req: any): any {
 }
 
 export async function verifyPayment(req: Request, res: Response) {
+  const log: Logger = res.locals.log || logger;
+  const startTime = process.hrtime.bigint();
+  let network = 'unknown';
+
   try {
     let { paymentPayload, paymentRequirements } = req.body;
     const isV1 = isV1Payload(paymentPayload);
 
-    console.log(`\n🔍 Verifying payment (x402 ${isV1 ? 'V1' : 'V2'})...`);
+    log.info({ action: 'verify', x402Version: isV1 ? 1 : 2 }, 'Verify request received');
 
     if (!paymentPayload) {
+      verifyTotal.inc({ network, result: 'error' });
       return res.status(500).json({
         isValid: false,
         payer: 'unknown',
@@ -183,15 +187,15 @@ export async function verifyPayment(req: Request, res: Response) {
     }
     paymentRequirements = normalizeRequirements(paymentRequirements);
 
-    const network = paymentPayload.accepted?.network;
+    network = paymentPayload.accepted?.network || 'unknown';
     const scheme = paymentPayload.accepted?.scheme;
 
-    console.log('   Scheme:', scheme);
-    console.log('   Network:', network);
+    log.debug({ scheme, network }, 'Payment details');
 
     // Verify scheme is "exact"
     if (scheme !== 'exact') {
-      console.log('   ❌ Unsupported payment scheme');
+      log.warn({ scheme, network }, 'Unsupported payment scheme');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: paymentPayload.payload?.authorization?.from || 'unknown',
@@ -201,16 +205,19 @@ export async function verifyPayment(req: Request, res: Response) {
 
     // Route by network — Solana uses CAIP-2 "solana:..." prefix
     if (network?.startsWith('solana:')) {
-      console.log('   🟣 Solana payment detected');
-      const result = await verifySolanaPayment(paymentPayload.payload, paymentRequirements);
-      console.log(result.isValid ? '✅ Payment verification successful!\n' : '❌ Payment verification failed!\n');
+      log.debug({ network }, 'Solana payment detected');
+      const result = await verifySolanaPayment(paymentPayload.payload, paymentRequirements, log);
+      verifyTotal.inc({ network, result: result.isValid ? 'valid' : 'invalid' });
+      recordDuration(startTime, network);
+      log.info({ action: 'verify', network, success: result.isValid, payer: result.payer }, 'Verify complete');
       return res.json(result);
     }
 
     // Resolve EVM network from CAIP-2 identifier
     const networkConfig = resolveEvmNetwork(network);
     if (!networkConfig) {
-      console.log('   ❌ Unknown payment network');
+      log.warn({ network }, 'Unknown payment network');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: paymentPayload.payload?.authorization?.from || 'unknown',
@@ -218,13 +225,14 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    console.log(`   ${networkConfig.emoji} ${networkConfig.label} payment detected`);
+    log.debug({ network, label: networkConfig.label }, 'EVM payment detected');
 
     // Extract v2 authorization data
     const { authorization, signature } = paymentPayload.payload || {};
 
     if (!authorization) {
-      console.log('   ❌ Missing authorization data');
+      log.warn({ network }, 'Missing authorization data');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: 'unknown',
@@ -239,11 +247,7 @@ export async function verifyPayment(req: Request, res: Response) {
     const nonce = authorization.nonce;
     const recipient = paymentRequirements.payTo;
 
-    console.log('   Owner (Payer):', owner);
-    console.log('   Spender (Facilitator):', spender);
-    console.log('   Recipient (Merchant):', recipient);
-    console.log('   Value:', value);
-    console.log('   Deadline:', new Date(Number(deadline) * 1000).toISOString());
+    log.debug({ payer: owner, spender, recipient, value, deadline: new Date(Number(deadline) * 1000).toISOString() }, 'Authorization details');
 
     // Build chain object for viem
     const chain = {
@@ -284,7 +288,8 @@ export async function verifyPayment(req: Request, res: Response) {
       });
 
       if (!isValidSig) {
-        console.log('   ❌ Invalid permit signature');
+        log.warn({ payer: owner, network, errorReason: 'invalid_exact_evm_payload_signature' }, 'Invalid permit signature');
+        verifyTotal.inc({ network, result: 'invalid' });
         return res.json({
           isValid: false,
           payer: owner,
@@ -292,9 +297,10 @@ export async function verifyPayment(req: Request, res: Response) {
         });
       }
 
-      console.log('   ✅ Permit signature valid');
+      log.debug('Permit signature valid');
     } catch (error) {
-      console.log('   ❌ Permit signature verification failed:', error);
+      log.warn({ err: error, payer: owner, network }, 'Permit signature verification failed');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: owner,
@@ -306,7 +312,8 @@ export async function verifyPayment(req: Request, res: Response) {
     const now = Math.floor(Date.now() / 1000);
     const validAfter = Number(authorization.validAfter || '0');
     if (now < validAfter) {
-      console.log('   ❌ Permit not yet valid (validAfter in the future)');
+      log.warn({ payer: owner, network, errorReason: 'invalid_exact_evm_payload_authorization_valid_after' }, 'Permit not yet valid');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: owner,
@@ -315,7 +322,8 @@ export async function verifyPayment(req: Request, res: Response) {
     }
 
     if (now > Number(deadline)) {
-      console.log('   ❌ Permit expired');
+      log.warn({ payer: owner, network, errorReason: 'invalid_exact_evm_payload_authorization_valid_before' }, 'Permit expired');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: owner,
@@ -323,11 +331,12 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    console.log('   ✅ Time window valid');
+    log.debug('Time window valid');
 
     // Check amount (spec step 3)
     if (BigInt(value) < BigInt(paymentRequirements.amount)) {
-      console.log('   ❌ Insufficient amount');
+      log.warn({ payer: owner, network, errorReason: 'invalid_exact_evm_payload_authorization_value_mismatch' }, 'Insufficient amount');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: owner,
@@ -335,12 +344,13 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    console.log('   ✅ Amount sufficient');
+    log.debug('Amount sufficient');
 
     // Check spender matches our facilitator address (spec step 5)
     const facilitatorAddress = resolveEvmFacilitatorAddress(network);
     if (facilitatorAddress && spender.toLowerCase() !== facilitatorAddress.toLowerCase()) {
-      console.log('   ❌ Spender does not match facilitator');
+      log.warn({ payer: owner, network, errorReason: 'invalid_exact_evm_payload_recipient_mismatch' }, 'Spender does not match facilitator');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: owner,
@@ -348,11 +358,12 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    console.log('   ✅ Spender valid');
+    log.debug('Spender valid');
 
     // Check recipient
     if (recipient.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {
-      console.log('   ❌ Invalid recipient');
+      log.warn({ payer: owner, network, errorReason: 'invalid_exact_evm_payload_recipient_mismatch' }, 'Invalid recipient');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: owner,
@@ -360,7 +371,7 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    console.log('   ✅ Recipient valid');
+    log.debug('Recipient valid');
 
     // Check on-chain ERC-20 token balance
     const publicClient = createPublicClient({
@@ -378,7 +389,7 @@ export async function verifyPayment(req: Request, res: Response) {
       }
     ] as const;
 
-    console.log('   SBC Token:', networkConfig.sbcTokenAddress);
+    log.debug({ sbcToken: networkConfig.sbcTokenAddress }, 'Checking on-chain balance');
 
     const balance = await publicClient.readContract({
       address: networkConfig.sbcTokenAddress as `0x${string}`,
@@ -388,10 +399,11 @@ export async function verifyPayment(req: Request, res: Response) {
     });
 
     const balanceFormatted = Number(balance) / Math.pow(10, networkConfig.decimals);
-    console.log(`   Sender SBC balance: ${balance.toString()} (${balanceFormatted} SBC)`);
+    log.debug({ balance: balance.toString(), balanceFormatted, payer: owner }, 'Balance check');
 
     if (balance < BigInt(value)) {
-      console.log('   ❌ Insufficient balance');
+      log.warn({ payer: owner, network, balance: balance.toString(), required: value, errorReason: 'insufficient_funds' }, 'Insufficient balance');
+      verifyTotal.inc({ network, result: 'invalid' });
       return res.json({
         isValid: false,
         payer: owner,
@@ -399,11 +411,13 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
-    console.log('   ✅ Balance sufficient');
+    log.debug('Balance sufficient');
 
     // All checks passed
     const remainingSeconds = Number(deadline) - Math.floor(Date.now() / 1000);
-    console.log(`✅ Payment verification successful! (${remainingSeconds}s until permit expires)\n`);
+    verifyTotal.inc({ network, result: 'valid' });
+    recordDuration(startTime, network);
+    log.info({ action: 'verify', network, payer: owner, success: true, remainingSeconds }, 'Verify successful');
     res.json({
       isValid: true,
       payer: owner,
@@ -412,7 +426,8 @@ export async function verifyPayment(req: Request, res: Response) {
     });
 
   } catch (error: any) {
-    console.error('❌ Verification error:', error);
+    log.error({ err: error, action: 'verify', network }, 'Verification error');
+    verifyTotal.inc({ network, result: 'error' });
 
     // Try to extract payer from request if possible
     let payer = 'unknown';
@@ -426,4 +441,9 @@ export async function verifyPayment(req: Request, res: Response) {
       invalidReason: `Server error: ${error.message}`,
     });
   }
+}
+
+function recordDuration(startTime: bigint, network: string) {
+  const durationMs = Number(process.hrtime.bigint() - startTime) / 1e6;
+  verifyDuration.observe({ network }, durationMs / 1000);
 }

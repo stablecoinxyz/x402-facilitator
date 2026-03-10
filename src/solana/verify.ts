@@ -12,7 +12,9 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { getAssociatedTokenAddress } from '@solana/spl-token';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
+import type { Logger } from 'pino';
 import { config } from '../config';
+import logger from '../lib/logger';
 
 interface SolanaPaymentPayload {
   from: string;      // Base58 public key
@@ -34,15 +36,13 @@ interface PaymentRequirements {
  */
 export async function verifySolanaPayment(
   paymentPayload: SolanaPaymentPayload,
-  paymentRequirements: PaymentRequirements
+  paymentRequirements: PaymentRequirements,
+  log: Logger = logger,
 ): Promise<{ isValid: boolean; payer: string; invalidReason: string | null }> {
   try {
     const { from, to, amount, nonce, deadline, signature } = paymentPayload;
 
-    console.log('   From (Solana):', from);
-    console.log('   To (Solana):', to);
-    console.log('   Amount:', amount, `(${Number(amount) / 1e9} SBC)`);
-    console.log('   Deadline:', new Date(deadline * 1000).toISOString());
+    log.debug({ from, to, amount, amountSBC: Number(amount) / 1e9, deadline: new Date(deadline * 1000).toISOString() }, 'Solana verify details');
 
     // 1. Verify signature (Ed25519)
     try {
@@ -59,41 +59,41 @@ export async function verifySolanaPayment(
       );
 
       if (!isValidSig) {
-        console.log('   ❌ Invalid Solana signature');
+        log.warn({ payer: from }, 'Invalid Solana signature');
         return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_signature' };
       }
 
-      console.log('   ✅ Signature valid (Ed25519)');
+      log.debug('Signature valid (Ed25519)');
     } catch (error: any) {
-      console.log('   ❌ Signature verification failed:', error.message);
+      log.warn({ err: error, payer: from }, 'Signature verification failed');
       return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_signature' };
     }
 
     // 2. Check deadline
     const now = Math.floor(Date.now() / 1000);
     if (now > deadline) {
-      console.log('   ❌ Payment expired');
+      log.warn({ payer: from }, 'Payment expired');
       return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_authorization_valid_before' };
     }
 
-    console.log('   ✅ Deadline valid');
+    log.debug('Deadline valid');
 
     // 3. Check amount
     const requiredAmount = paymentRequirements.amount ?? paymentRequirements.maxAmountRequired ?? '0';
     if (BigInt(amount) < BigInt(requiredAmount)) {
-      console.log('   ❌ Insufficient amount');
+      log.warn({ payer: from, amount, required: requiredAmount }, 'Insufficient amount');
       return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_authorization_value_mismatch' };
     }
 
-    console.log('   ✅ Amount sufficient');
+    log.debug('Amount sufficient');
 
     // 4. Check recipient
     if (to.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {
-      console.log('   ❌ Invalid recipient');
+      log.warn({ payer: from, to, expected: paymentRequirements.payTo }, 'Invalid recipient');
       return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_recipient_mismatch' };
     }
 
-    console.log('   ✅ Recipient valid');
+    log.debug('Recipient valid');
 
     // 5. Check on-chain SBC token balance
     try {
@@ -107,28 +107,28 @@ export async function verifySolanaPayment(
         fromPublicKey
       );
 
-      console.log('   Checking SBC token account:', associatedTokenAddress.toBase58());
+      log.debug({ tokenAccount: associatedTokenAddress.toBase58() }, 'Checking SBC token account');
 
       const tokenAccountInfo = await connection.getTokenAccountBalance(associatedTokenAddress);
       const balance = BigInt(tokenAccountInfo.value.amount);
 
-      console.log('   Sender SBC balance:', balance.toString(), `(${Number(balance) / 1e9} SBC)`);
+      log.debug({ balance: balance.toString(), balanceSBC: Number(balance) / 1e9 }, 'Sender SBC balance');
 
       if (balance < BigInt(amount)) {
-        console.log('   ❌ Insufficient SBC balance');
+        log.warn({ payer: from, balance: balance.toString(), required: amount }, 'Insufficient SBC balance');
         return { isValid: false, payer: from, invalidReason: 'insufficient_funds' };
       }
 
-      console.log('   ✅ Balance sufficient');
+      log.debug('Balance sufficient');
     } catch (error: any) {
-      console.log('   ❌ Error checking balance:', error.message);
+      log.warn({ err: error, payer: from }, 'Error checking balance');
       return { isValid: false, payer: from, invalidReason: `Balance check failed: ${error.message}` };
     }
 
     // All checks passed
     return { isValid: true, payer: from, invalidReason: null };
   } catch (error: any) {
-    console.error('❌ Solana verification error:', error);
+    log.error({ err: error }, 'Solana verification error');
     return { isValid: false, payer: paymentPayload.from || 'unknown', invalidReason: `Verification error: ${error.message}` };
   }
 }
