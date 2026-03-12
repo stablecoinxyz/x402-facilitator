@@ -979,9 +979,8 @@ describe('POST /verify - x402 V2 Spec Compliance', () => {
 
       const response = await sendVerify(app, paymentPayload, paymentRequirements);
 
+      expect(response.status).toBe(200);
       expect(response.body.isValid).toBe(false);
-      // Mock may be caught by inner handler (returns "signature") or escape to
-      // outer handler (returns "Server error: bad key") depending on module resolution
       expect(response.body.invalidReason).toBeTruthy();
     });
   });

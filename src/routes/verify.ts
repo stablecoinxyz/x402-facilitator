@@ -207,11 +207,23 @@ export async function verifyPayment(req: Request, res: Response) {
     // Route by network — Solana uses CAIP-2 "solana:..." prefix
     if (network?.startsWith('solana:')) {
       log.debug({ network }, 'Solana payment detected');
-      const result = await verifySolanaPayment(paymentPayload.payload, paymentRequirements, log);
-      verifyTotal.inc({ network, result: result.isValid ? 'valid' : 'invalid' });
-      recordDuration(startTime, network);
-      log.info({ action: 'verify', network, success: result.isValid, payer: result.payer }, 'Verify complete');
-      return res.json(result);
+      try {
+        const result = await verifySolanaPayment(paymentPayload.payload, paymentRequirements, log);
+        verifyTotal.inc({ network, result: result.isValid ? 'valid' : 'invalid' });
+        recordDuration(startTime, network);
+        log.info({ action: 'verify', network, success: result.isValid, payer: result.payer }, 'Verify complete');
+        return res.json(result);
+      } catch (solanaErr: any) {
+        const payer = paymentPayload.payload?.from || 'unknown';
+        log.warn({ err: solanaErr, network, payer }, 'Solana verification error');
+        verifyTotal.inc({ network, result: 'invalid' });
+        recordDuration(startTime, network);
+        return res.json({
+          isValid: false,
+          payer,
+          invalidReason: 'invalid_solana_signature',
+        });
+      }
     }
 
     // Resolve EVM network from CAIP-2 identifier
