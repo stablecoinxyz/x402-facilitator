@@ -100,8 +100,9 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       );
 
       if (baseKinds?.length > 0) {
+        // SBC + USDC, each with v1 + v2 = 4 kinds
         const versions = baseKinds.map((k: any) => k.x402Version).sort();
-        expect(versions).toEqual([1, 2]);
+        expect(versions).toEqual([1, 1, 2, 2]);
         expect(baseKinds[0].extra.assetTransferMethod).toBe('erc2612');
       }
     });
@@ -114,8 +115,9 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       );
 
       if (sepoliaKinds?.length > 0) {
+        // SBC + USDC, each with v1 + v2 = 4 kinds
         const versions = sepoliaKinds.map((k: any) => k.x402Version).sort();
-        expect(versions).toEqual([1, 2]);
+        expect(versions).toEqual([1, 1, 2, 2]);
       }
     });
 
