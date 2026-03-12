@@ -63,7 +63,7 @@ export function resolveToken(chainId: number, asset: string): { address: string;
   }
   if (chainId === config.baseSepoliaChainId) {
     if (a === config.baseSepoliaSbcTokenAddress.toLowerCase()) return { address: config.baseSepoliaSbcTokenAddress, decimals: config.baseSepoliaSbcDecimals, name: 'Stable Coin', version: '1' };
-    if (a === config.baseSepoliaUsdcTokenAddress.toLowerCase()) return { address: config.baseSepoliaUsdcTokenAddress, decimals: config.baseSepoliaUsdcDecimals, name: 'USD Coin', version: '2' };
+    if (a === config.baseSepoliaUsdcTokenAddress.toLowerCase()) return { address: config.baseSepoliaUsdcTokenAddress, decimals: config.baseSepoliaUsdcDecimals, name: 'USDC', version: '2' };
   }
   if (chainId === config.radiusChainId) {
     if (a === config.radiusSbcTokenAddress.toLowerCase()) return { address: config.radiusSbcTokenAddress, decimals: config.radiusSbcDecimals, name: 'Stable Coin', version: '1' };
