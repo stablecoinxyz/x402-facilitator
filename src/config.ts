@@ -13,6 +13,8 @@ export const config = {
   baseChainId: parseInt(process.env.BASE_CHAIN_ID || '8453'),
   baseSbcTokenAddress: process.env.BASE_SBC_TOKEN_ADDRESS || '0xfdcC3dd6671eaB0709A4C0f3F53De9a333d80798',
   baseSbcDecimals: parseInt(process.env.BASE_SBC_DECIMALS || '18'),
+  baseUsdcTokenAddress: process.env.BASE_USDC_TOKEN_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  baseUsdcDecimals: parseInt(process.env.BASE_USDC_DECIMALS || '6'),
 
   // Base Sepolia Configuration
   baseSepoliaRpcUrl: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
@@ -21,6 +23,8 @@ export const config = {
   baseSepoliaChainId: 84532,
   baseSepoliaSbcTokenAddress: process.env.BASE_SEPOLIA_SBC_TOKEN_ADDRESS || '0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16',
   baseSepoliaSbcDecimals: parseInt(process.env.BASE_SEPOLIA_SBC_DECIMALS || '6'),
+  baseSepoliaUsdcTokenAddress: process.env.BASE_SEPOLIA_USDC_TOKEN_ADDRESS || '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  baseSepoliaUsdcDecimals: parseInt(process.env.BASE_SEPOLIA_USDC_DECIMALS || '6'),
 
   // Radius Mainnet Configuration
   radiusRpcUrl: process.env.RADIUS_RPC_URL || 'https://rpc.radiustech.xyz',
@@ -45,6 +49,31 @@ export const config = {
   sbcTokenAddress: process.env.SBC_TOKEN_ADDRESS || 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
   sbcDecimals: 9,
 };
+
+/**
+ * Resolve an asset address to token config for a given EVM chain.
+ * Returns null if the asset is not whitelisted for that chain.
+ */
+export function resolveToken(chainId: number, asset: string): { address: string; decimals: number; name: string; version: string } | null {
+  const a = asset.toLowerCase();
+
+  if (chainId === config.baseChainId) {
+    if (a === config.baseSbcTokenAddress.toLowerCase()) return { address: config.baseSbcTokenAddress, decimals: config.baseSbcDecimals, name: 'Stable Coin', version: '1' };
+    if (a === config.baseUsdcTokenAddress.toLowerCase()) return { address: config.baseUsdcTokenAddress, decimals: config.baseUsdcDecimals, name: 'USD Coin', version: '2' };
+  }
+  if (chainId === config.baseSepoliaChainId) {
+    if (a === config.baseSepoliaSbcTokenAddress.toLowerCase()) return { address: config.baseSepoliaSbcTokenAddress, decimals: config.baseSepoliaSbcDecimals, name: 'Stable Coin', version: '1' };
+    if (a === config.baseSepoliaUsdcTokenAddress.toLowerCase()) return { address: config.baseSepoliaUsdcTokenAddress, decimals: config.baseSepoliaUsdcDecimals, name: 'USD Coin', version: '2' };
+  }
+  if (chainId === config.radiusChainId) {
+    if (a === config.radiusSbcTokenAddress.toLowerCase()) return { address: config.radiusSbcTokenAddress, decimals: config.radiusSbcDecimals, name: 'Stable Coin', version: '1' };
+  }
+  if (chainId === config.radiusTestnetChainId) {
+    if (a === config.radiusTestnetSbcTokenAddress.toLowerCase()) return { address: config.radiusTestnetSbcTokenAddress, decimals: config.radiusTestnetSbcDecimals, name: 'Stable Coin', version: '1' };
+  }
+
+  return null;
+}
 
 // Validate Solana config (optional - only if Solana is being used)
 if (config.solanaFacilitatorPrivateKey && !config.solanaFacilitatorAddress) {

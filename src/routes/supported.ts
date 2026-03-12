@@ -27,12 +27,14 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // Add Base Mainnet if configured
   if (config.baseFacilitatorAddress && config.baseFacilitatorPrivateKey) {
     addKind('eip155:8453', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
+    addKind('eip155:8453', { assetTransferMethod: 'erc2612', name: 'USD Coin', version: '2' });
     addSigner(signers, 'eip155:*', config.baseFacilitatorAddress);
   }
 
   // Add Base Sepolia if configured
   if (config.baseSepoliaFacilitatorAddress && config.baseSepoliaFacilitatorPrivateKey) {
     addKind('eip155:84532', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
+    addKind('eip155:84532', { assetTransferMethod: 'erc2612', name: 'USD Coin', version: '2' });
     addSigner(signers, 'eip155:*', config.baseSepoliaFacilitatorAddress);
   }
 

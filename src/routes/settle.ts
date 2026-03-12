@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { createWalletClient, createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
-import { config } from '../config';
+import { config, resolveToken } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
@@ -160,7 +160,8 @@ export async function settlePayment(req: Request, res: Response) {
     log.info({ action: 'settle', x402Version: isV1 ? 1 : 2 }, 'Settle request received');
 
     if (!paymentPayload) {
-      settleTotal.inc({ network, result: 'error' });
+      log.warn({ action: 'settle' }, 'Missing paymentPayload');
+      settleTotal.inc({ network, result: 'bad_request' });
       return res.status(400).json({
         success: false,
         payer: 'unknown',
@@ -242,6 +243,23 @@ export async function settlePayment(req: Request, res: Response) {
     const deadline = authorization.validBefore;
     const nonce = authorization.nonce;
     const recipient = paymentRequirements.payTo;
+
+    // Resolve token from asset address in paymentRequirements
+    const assetAddress = paymentRequirements.asset;
+    const tokenConfig = assetAddress ? resolveToken(networkConfig.chainId, assetAddress) : null;
+    const tokenAddress = tokenConfig?.address || networkConfig.sbcTokenAddress;
+
+    if (assetAddress && !tokenConfig) {
+      log.warn({ asset: assetAddress, network }, 'Unsupported asset for network');
+      settleTotal.inc({ network, result: 'failed' });
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'unsupported_asset'
+      });
+    }
 
     // Nonce replay protection — reject if we've already settled this exact permit
     if (nonceTracker.hasSettled(network, owner, nonce)) {
@@ -388,7 +406,7 @@ export async function settlePayment(req: Request, res: Response) {
         }
       ] as const;
 
-      log.debug({ token: networkConfig.sbcTokenAddress }, 'Token contract');
+      log.debug({ token: tokenAddress }, 'Token contract');
 
       // Gas estimation dry-run — catch reverts before wasting gas.
       // Skip for Radius: eth_estimateGas always returns "Exec Failed" on Radius
@@ -396,7 +414,7 @@ export async function settlePayment(req: Request, res: Response) {
         log.debug('Estimating gas for permit()');
         try {
           await publicClient.estimateContractGas({
-            address: networkConfig.sbcTokenAddress as `0x${string}`,
+            address: tokenAddress as `0x${string}`,
             abi: ERC20_PERMIT_ABI,
             functionName: 'permit',
             args: [
@@ -430,7 +448,7 @@ export async function settlePayment(req: Request, res: Response) {
       log.debug({ step: 1, payer: owner, spender, value, deadline }, 'Calling permit()');
 
       const permitHash = await walletClient.writeContract({
-        address: networkConfig.sbcTokenAddress as `0x${string}`,
+        address: tokenAddress as `0x${string}`,
         abi: ERC20_PERMIT_ABI,
         functionName: 'permit',
         args: [
@@ -462,7 +480,7 @@ export async function settlePayment(req: Request, res: Response) {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           transferHash = await walletClient.writeContract({
-            address: networkConfig.sbcTokenAddress as `0x${string}`,
+            address: tokenAddress as `0x${string}`,
             abi: ERC20_PERMIT_ABI,
             functionName: 'transferFrom',
             args: [
@@ -519,9 +537,6 @@ export async function settlePayment(req: Request, res: Response) {
     });
 
   } catch (error: any) {
-    log.error({ err: error, action: 'settle', network }, 'Settlement error');
-    settleTotal.inc({ network, result: 'error' });
-
     // Try to extract payer and network from request if possible
     let payer = 'unknown';
     try {
@@ -529,12 +544,48 @@ export async function settlePayment(req: Request, res: Response) {
       network = req.body.paymentPayload?.accepted?.network || network;
     } catch {}
 
+    // Categorize the error for precise metrics
+    const msg = error?.message || '';
+    const shortMsg = error?.shortMessage || '';
+    let errorCategory: string;
+    let errorReason: string;
+
+    if (msg.includes('insufficient allowance') || shortMsg.includes('insufficient allowance')) {
+      errorCategory = 'insufficient_allowance';
+      errorReason = 'permit_not_effective';
+    } else if (msg.includes('nonce too low') || msg.includes('replacement transaction underpriced') || msg.includes('already known')) {
+      errorCategory = 'nonce_conflict';
+      errorReason = 'tx_nonce_conflict';
+    } else if (msg.includes('insufficient funds') || msg.includes('gas price too low') || msg.includes('intrinsic gas too low')) {
+      errorCategory = 'gas_error';
+      errorReason = 'insufficient_gas';
+    } else if (msg.includes('ECDSA') || msg.includes('invalid signature') || msg.includes('Invalid signer')) {
+      errorCategory = 'invalid_signature';
+      errorReason = 'permit_signature_invalid';
+    } else if (msg.includes('execution reverted') || msg.includes('revert')) {
+      errorCategory = 'tx_reverted';
+      errorReason = `tx_reverted: ${shortMsg || msg.slice(0, 200)}`;
+    } else if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
+      errorCategory = 'rpc_error';
+      errorReason = 'rpc_connection_error';
+    } else if (msg.includes('TransactionReceiptNotFoundError') || msg.includes('could not be found')) {
+      errorCategory = 'receipt_timeout';
+      errorReason = 'tx_receipt_not_found';
+    } else {
+      errorCategory = 'unknown';
+      errorReason = msg.slice(0, 300);
+    }
+
+    log.error({ err: error, action: 'settle', network, payer, errorCategory, errorReason }, `Settlement error: ${errorCategory}`);
+    settleTotal.inc({ network, result: errorCategory });
+    recordDuration(startTime, network);
+
     res.status(200).json({
       success: false,
       payer,
       transaction: '',
       network,
-      errorReason: error.message,
+      errorReason,
     });
   }
 }

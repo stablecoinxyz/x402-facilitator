@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { createPublicClient, http, verifyTypedData } from 'viem';
 import type { Logger } from 'pino';
-import { config } from '../config';
+import { config, resolveToken } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
@@ -173,8 +173,9 @@ export async function verifyPayment(req: Request, res: Response) {
     log.info({ action: 'verify', x402Version: isV1 ? 1 : 2 }, 'Verify request received');
 
     if (!paymentPayload) {
-      verifyTotal.inc({ network, result: 'error' });
-      return res.status(500).json({
+      log.warn({ action: 'verify' }, 'Missing paymentPayload');
+      verifyTotal.inc({ network, result: 'bad_request' });
+      return res.status(400).json({
         isValid: false,
         payer: 'unknown',
         invalidReason: 'Missing paymentPayload',
@@ -259,14 +260,32 @@ export async function verifyPayment(req: Request, res: Response) {
       testnet: networkConfig.label.includes('Sepolia') || networkConfig.label.includes('Testnet'),
     };
 
+    // Resolve token from asset address in paymentRequirements
+    const assetAddress = paymentRequirements.asset;
+    const tokenConfig = assetAddress ? resolveToken(networkConfig.chainId, assetAddress) : null;
+
+    // Fall back to network default (SBC token) if no asset specified
+    const tokenAddress = tokenConfig?.address || networkConfig.sbcTokenAddress;
+    const tokenDecimals = tokenConfig?.decimals || networkConfig.decimals;
+
+    if (assetAddress && !tokenConfig) {
+      log.warn({ asset: assetAddress, network }, 'Unsupported asset for network');
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({
+        isValid: false,
+        payer: owner,
+        invalidReason: 'unsupported_asset'
+      });
+    }
+
     // Verify ERC-2612 Permit signature
-    // Get EIP-712 domain name/version from extra or fall back to defaults
+    // Get EIP-712 domain name/version from token config or extra fields
     const extra = paymentRequirements.extra || {};
     const permitDomain = {
-      name: extra.name || 'Stable Coin',
-      version: extra.version || '1',
+      name: extra.name || tokenConfig?.name || 'Stable Coin',
+      version: extra.version || tokenConfig?.version || '1',
       chainId: networkConfig.chainId,
-      verifyingContract: networkConfig.sbcTokenAddress as `0x${string}`,
+      verifyingContract: tokenAddress as `0x${string}`,
     };
 
     const permitMessage = {
@@ -389,16 +408,16 @@ export async function verifyPayment(req: Request, res: Response) {
       }
     ] as const;
 
-    log.debug({ sbcToken: networkConfig.sbcTokenAddress }, 'Checking on-chain balance');
+    log.debug({ token: tokenAddress }, 'Checking on-chain balance');
 
     const balance = await publicClient.readContract({
-      address: networkConfig.sbcTokenAddress as `0x${string}`,
+      address: tokenAddress as `0x${string}`,
       abi: ERC20_ABI,
       functionName: 'balanceOf',
       args: [owner as `0x${string}`]
     });
 
-    const balanceFormatted = Number(balance) / Math.pow(10, networkConfig.decimals);
+    const balanceFormatted = Number(balance) / Math.pow(10, tokenDecimals);
     log.debug({ balance: balance.toString(), balanceFormatted, payer: owner }, 'Balance check');
 
     if (balance < BigInt(value)) {
@@ -426,14 +445,25 @@ export async function verifyPayment(req: Request, res: Response) {
     });
 
   } catch (error: any) {
-    log.error({ err: error, action: 'verify', network }, 'Verification error');
-    verifyTotal.inc({ network, result: 'error' });
-
     // Try to extract payer from request if possible
     let payer = 'unknown';
     try {
       payer = req.body.paymentPayload?.payload?.authorization?.from || 'unknown';
     } catch {}
+
+    const msg = error?.message || '';
+    let errorCategory: string;
+
+    if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed')) {
+      errorCategory = 'rpc_error';
+    } else if (msg.includes('execution reverted') || msg.includes('revert')) {
+      errorCategory = 'rpc_reverted';
+    } else {
+      errorCategory = 'unknown';
+    }
+
+    log.error({ err: error, action: 'verify', network, payer, errorCategory }, `Verification error: ${errorCategory}`);
+    verifyTotal.inc({ network, result: errorCategory });
 
     res.status(500).json({
       isValid: false,

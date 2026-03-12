@@ -97,7 +97,7 @@
       "datasource": { "type": "prometheus", "uid": "grafanacloud-sbclogs-prom" },
       "targets": [
         {
-          "expr": "sum(rate(x402_settle_total{result=\"success\"}[5m])) / sum(rate(x402_settle_total[5m])) * 100",
+          "expr": "sum(increase(x402_settle_total{result=\"success\"}[$__range])) / sum(increase(x402_settle_total[$__range])) * 100",
           "legendFormat": "",
           "refId": "A"
         }
@@ -134,7 +134,7 @@
       "datasource": { "type": "prometheus", "uid": "grafanacloud-sbclogs-prom" },
       "targets": [
         {
-          "expr": "sum(rate(x402_verify_total{result=\"valid\"}[5m])) / sum(rate(x402_verify_total[5m])) * 100",
+          "expr": "sum(increase(x402_verify_total{result=\"valid\"}[$__range])) / sum(increase(x402_verify_total[$__range])) * 100",
           "legendFormat": "",
           "refId": "A"
         }
@@ -449,7 +449,7 @@
       "datasource": { "type": "prometheus", "uid": "grafanacloud-sbclogs-prom" },
       "targets": [
         {
-          "expr": "sum by (result) (rate(x402_settle_total{result=~\"error|failed|expired|replay\"}[5m]))",
+          "expr": "sum by (result) (rate(x402_settle_total{result!=\"success\"}[5m]))",
           "legendFormat": "{{result}}",
           "refId": "A"
         }

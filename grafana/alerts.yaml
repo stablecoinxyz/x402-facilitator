@@ -4,18 +4,39 @@
 #   Alerts & IRM → Alert rules → + New alert rule
 #
 # These are reference definitions — copy the PromQL expressions into the Grafana alert rule builder.
+#
+# Settle result labels:
+#   success, failed, expired, replay, bad_request,
+#   insufficient_allowance, nonce_conflict, gas_error,
+#   invalid_signature, tx_reverted, rpc_error, receipt_timeout, unknown
 
 rules:
-  - name: Settle error rate high
+  - name: Settle failure rate high
     condition: >
-      sum(rate(x402_settle_total{result=~"error|failed"}[5m]))
+      sum(rate(x402_settle_total{result!~"success|replay"}[5m]))
       /
       sum(rate(x402_settle_total[5m]))
       > 0.1
     for: 5m
     severity: critical
-    summary: "Settle error rate > 10% for 5 minutes"
-    action: "Check fly logs -a sbc-x402-facilitator for error details"
+    summary: "Settle failure rate > 10% for 5 minutes"
+    action: "Check Loki: {app=\"sbc-x402-facilitator\"} | json | action=\"settle\" | errorCategory!=\"\""
+
+  - name: RPC errors spiking
+    condition: >
+      sum(increase(x402_settle_total{result="rpc_error"}[5m])) > 3
+    for: 0m
+    severity: critical
+    summary: "Multiple RPC connection failures in 5 minutes"
+    action: "Check RPC provider status for affected network"
+
+  - name: Nonce conflicts detected
+    condition: >
+      sum(increase(x402_settle_total{result="nonce_conflict"}[5m])) > 0
+    for: 0m
+    severity: warning
+    summary: "Transaction nonce conflicts — possible concurrent settle race"
+    action: "Check if multiple facilitator instances are using the same wallet"
 
   - name: Permit expired attempts
     condition: >
@@ -24,6 +45,14 @@ rules:
     severity: warning
     summary: "Settle attempts with expired permits detected"
     action: "Check if SDK clients are using too-short permit durations"
+
+  - name: Signature errors spiking
+    condition: >
+      sum(increase(x402_settle_total{result="invalid_signature"}[5m])) > 3
+    for: 0m
+    severity: warning
+    summary: "Multiple invalid permit signatures in settlement"
+    action: "Check if a payer is sending malformed permits"
 
   - name: Health check down
     type: loki

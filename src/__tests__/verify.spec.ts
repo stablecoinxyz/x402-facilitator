@@ -356,7 +356,7 @@ describe('POST /verify - x402 V2 Spec Compliance', () => {
           paymentRequirements: createPaymentRequirements('eip155:8453'),
         });
 
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(400);
       expect(response.body.isValid).toBe(false);
       expect(response.body.invalidReason).toBeTruthy();
     });
