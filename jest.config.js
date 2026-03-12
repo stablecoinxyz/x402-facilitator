@@ -1,5 +1,12 @@
 process.env.ENABLE_REAL_SETTLEMENT = 'false';
 
+// Dummy facilitator keys for CI — settle code checks these before reaching
+// the simulated settlement path. The viem mock handles all actual crypto ops.
+process.env.BASE_FACILITATOR_PRIVATE_KEY = process.env.BASE_FACILITATOR_PRIVATE_KEY || '0x0000000000000000000000000000000000000000000000000000000000000001';
+process.env.BASE_FACILITATOR_ADDRESS = process.env.BASE_FACILITATOR_ADDRESS || '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
+process.env.BASE_SEPOLIA_FACILITATOR_PRIVATE_KEY = process.env.BASE_SEPOLIA_FACILITATOR_PRIVATE_KEY || '0x0000000000000000000000000000000000000000000000000000000000000001';
+process.env.BASE_SEPOLIA_FACILITATOR_ADDRESS = process.env.BASE_SEPOLIA_FACILITATOR_ADDRESS || '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
+
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
