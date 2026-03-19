@@ -6,6 +6,7 @@ import { config, resolveToken } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
+import { settlementQueue } from '../lib/settlement-queue';
 import logger from '../lib/logger';
 
 /**
@@ -353,19 +354,6 @@ export async function settlePayment(req: Request, res: Response) {
       pollingInterval: 100,
     });
 
-    // Fetch pending nonce once — use explicitly to avoid stale nonce between permit + transferFrom
-    const pendingNonce = await publicClient.getTransactionCount({
-      address: account.address,
-      blockTag: 'pending',
-    });
-
-    // Passing gasPrice forces viem to send type 0 (legacy) tx for Radius.
-    const gasOverrides: { gasPrice?: bigint } = {};
-    if (isRadius) {
-      gasOverrides.gasPrice = (await publicClient.getGasPrice()) + 1000000000n;
-      log.debug({ gasPrice: gasOverrides.gasPrice.toString() }, 'Radius legacy gasPrice');
-    }
-
     log.debug({ label: networkConfig.label }, 'Executing transfer');
 
     // Check if we should use real or simulated settlement
@@ -374,7 +362,7 @@ export async function settlePayment(req: Request, res: Response) {
     let txHash: string;
 
     if (useRealSettlement) {
-      log.info({ payer: owner, network, mode: 'real' }, 'Real settlement: ERC-2612 Permit + TransferFrom');
+      log.info({ payer: owner, network, mode: 'real', queueDepth: settlementQueue.pending(account.address) }, 'Real settlement: ERC-2612 Permit + TransferFrom');
 
       // ERC-2612 Permit ABI
       const ERC20_PERMIT_ABI = [
@@ -444,76 +432,95 @@ export async function settlePayment(req: Request, res: Response) {
         log.debug('Skipping gas estimation (Radius fee abstraction incompatible)');
       }
 
-      // Step 1: Call permit() to approve the facilitator
-      log.debug({ step: 1, payer: owner, spender, value, deadline }, 'Calling permit()');
+      // Serialize on-chain execution per facilitator wallet to prevent nonce collisions.
+      // Critical for chains without a mempool (Radius) where concurrent nonce submissions fail.
+      const onChainResult = await settlementQueue.enqueue(account.address, async () => {
+        // Fetch nonce INSIDE the queue — guarantees sequential nonce assignment
+        const pendingNonce = await publicClient.getTransactionCount({
+          address: account.address,
+          blockTag: 'pending',
+        });
 
-      const permitHash = await walletClient.writeContract({
-        address: tokenAddress as `0x${string}`,
-        abi: ERC20_PERMIT_ABI,
-        functionName: 'permit',
-        args: [
-          owner as `0x${string}`,
-          spender as `0x${string}`,
-          BigInt(value),
-          BigInt(deadline),
-          v,
-          r as `0x${string}`,
-          s as `0x${string}`
-        ],
-        nonce: pendingNonce,
-        ...gasOverrides,
-      });
-
-      log.debug({ permitHash }, 'Waiting for permit confirmation');
-      await publicClient.waitForTransactionReceipt({
-        hash: permitHash,
-        confirmations: 1
-      });
-      log.debug({ permitHash }, 'Permit confirmed');
-
-      // Step 2: Call transferFrom() to move tokens to merchant
-      // Retry up to 3 times — RPC nodes may not have the permit tx yet
-      log.debug({ step: 2, from: owner, to: recipient, amount: value }, 'Calling transferFrom()');
-
-      let transferHash = '' as `0x${string}`;
-      const maxRetries = 3;
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          transferHash = await walletClient.writeContract({
-            address: tokenAddress as `0x${string}`,
-            abi: ERC20_PERMIT_ABI,
-            functionName: 'transferFrom',
-            args: [
-              owner as `0x${string}`,      // Payer
-              recipient as `0x${string}`,  // Merchant
-              BigInt(value)
-            ],
-            nonce: pendingNonce + 1,
-            ...gasOverrides,
-          });
-          break;
-        } catch (err: any) {
-          const msg = err?.message || '';
-          if (attempt < maxRetries && msg.includes('insufficient allowance')) {
-            log.warn({ attempt, maxRetries }, 'transferFrom failed (allowance not propagated), retrying');
-            await new Promise(r => setTimeout(r, 1000));
-            continue;
-          }
-          throw err;
+        // Passing gasPrice forces viem to send type 0 (legacy) tx for Radius.
+        const gasOverrides: { gasPrice?: bigint } = {};
+        if (isRadius) {
+          gasOverrides.gasPrice = (await publicClient.getGasPrice()) + 1000000000n;
+          log.debug({ gasPrice: gasOverrides.gasPrice.toString() }, 'Radius legacy gasPrice');
         }
-      }
 
-      txHash = transferHash;
+        // Step 1: Call permit() to approve the facilitator
+        log.debug({ step: 1, payer: owner, spender, value, deadline, nonce: pendingNonce }, 'Calling permit()');
 
-      log.debug({ txHash }, 'Waiting for transfer confirmation');
+        const permitHash = await walletClient.writeContract({
+          address: tokenAddress as `0x${string}`,
+          abi: ERC20_PERMIT_ABI,
+          functionName: 'permit',
+          args: [
+            owner as `0x${string}`,
+            spender as `0x${string}`,
+            BigInt(value),
+            BigInt(deadline),
+            v,
+            r as `0x${string}`,
+            s as `0x${string}`
+          ],
+          nonce: pendingNonce,
+          ...gasOverrides,
+        });
 
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: transferHash,
-        confirmations: 1
+        log.debug({ permitHash }, 'Waiting for permit confirmation');
+        await publicClient.waitForTransactionReceipt({
+          hash: permitHash,
+          confirmations: 1
+        });
+        log.debug({ permitHash }, 'Permit confirmed');
+
+        // Step 2: Call transferFrom() to move tokens to merchant
+        // Retry up to 3 times — RPC nodes may not have the permit tx yet
+        log.debug({ step: 2, from: owner, to: recipient, amount: value }, 'Calling transferFrom()');
+
+        let transferHash = '' as `0x${string}`;
+        const maxRetries = 3;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            transferHash = await walletClient.writeContract({
+              address: tokenAddress as `0x${string}`,
+              abi: ERC20_PERMIT_ABI,
+              functionName: 'transferFrom',
+              args: [
+                owner as `0x${string}`,      // Payer
+                recipient as `0x${string}`,  // Merchant
+                BigInt(value)
+              ],
+              nonce: pendingNonce + 1,
+              ...gasOverrides,
+            });
+            break;
+          } catch (err: any) {
+            const msg = err?.message || '';
+            if (attempt < maxRetries && msg.includes('insufficient allowance')) {
+              log.warn({ attempt, maxRetries }, 'transferFrom failed (allowance not propagated), retrying');
+              await new Promise(r => setTimeout(r, 1000));
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        log.debug({ txHash: transferHash }, 'Waiting for transfer confirmation');
+
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash: transferHash,
+          confirmations: 1
+        });
+
+        return { txHash: transferHash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed };
       });
+
+      txHash = onChainResult.txHash;
 
       log.info({
-        action: 'settle', network, payer: owner, txHash, blockNumber: receipt.blockNumber.toString(), gasUsed: receipt.gasUsed.toString(), success: true,
+        action: 'settle', network, payer: owner, txHash, blockNumber: onChainResult.blockNumber.toString(), gasUsed: onChainResult.gasUsed.toString(), success: true,
       }, 'Settlement complete');
     } else {
       log.info({ payer: owner, network, mode: 'simulated' }, 'Simulated settlement');
