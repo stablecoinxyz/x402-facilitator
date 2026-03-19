@@ -4,7 +4,7 @@ SBC x402 Facilitator — verifies and settles payments using the [x402 protocol]
 
 Uses ERC-2612 Permit for EVM chains (SBC token doesn't support EIP-3009) and delegated SPL transfers for Solana. The facilitator never holds customer funds.
 
-**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — 36/36 checks passing
+**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — 36/36 checks passing | **[Observability →](./grafana/README.md)**
 
 ## Supported Networks
 
@@ -24,6 +24,12 @@ Each network has its own env vars — mainnets and testnets can be configured si
 npm install
 cp .env.example .env  # configure facilitator keys per network
 ```
+
+## Concurrency & Settlement Safety
+
+- **Per-EOA settlement queue** — On-chain execution is serialized per facilitator wallet to prevent nonce collisions. Critical for chains without a mempool (e.g. Radius) where concurrent nonce submissions fail immediately. Different chains settle in parallel since they use separate wallets.
+- **Idempotent settle** — If a permit nonce was already settled, `/settle` returns the original `{ success: true, transaction: "0x..." }` instead of failing. Enables safe retries when HTTP responses are lost.
+- **Partial tx hash on failure** — If `permit()` succeeds but `transferFrom()` fails, the permit tx hash is included in the error response for on-chain debugging.
 
 ## Authentication
 
@@ -125,8 +131,8 @@ Set `LOG_LEVEL` env var to control verbosity (`debug`, `info`, `warn`, `error`).
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `x402_verify_total` | Counter | `network`, `result` (valid/invalid/error) |
-| `x402_settle_total` | Counter | `network`, `result` (success/failed/replay/expired/error) |
+| `x402_verify_total` | Counter | `network`, `result` (valid/invalid/bad_request/rpc_error/unknown) |
+| `x402_settle_total` | Counter | `network`, `result` (success/failed/replay/expired/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown) |
 | `x402_verify_duration_seconds` | Histogram | `network` |
 | `x402_settle_duration_seconds` | Histogram | `network` |
 | Default process metrics | — | CPU, memory, event loop lag |
@@ -141,7 +147,7 @@ curl localhost:3001/metrics -H "Authorization: Bearer test"
 
 - **Stack**: `sbclogs.grafana.net`
 - **Loki** (logs): query with `{app="sbc-x402-facilitator"} | json`
-- **Prometheus** (metrics): scrapes `/metrics` via Fly.io `[metrics]` in fly.toml
+- **Prometheus** (metrics): scraped by [sbc-grafana-alloy](https://github.com/stablecoinxyz/grafana-alloy) → remote-write to Grafana Cloud
 
 Example LogQL queries:
 ```
@@ -161,22 +167,27 @@ sum(rate(x402_settle_total{result="success"}[5m])) / sum(rate(x402_settle_total[
 histogram_quantile(0.95, rate(x402_verify_duration_seconds_bucket[5m]))
 
 # Settle errors by network
-sum by (network) (rate(x402_settle_total{result=~"error|failed"}[5m]))
+sum by (network) (rate(x402_settle_total{result!="success"}[5m]))
 ```
 
 ### Alert rules (Grafana)
 
+See [`grafana/alerts.yaml`](./grafana/alerts.yaml) for full PromQL expressions.
+
 | Alert | Condition |
 |-------|-----------|
-| Settle error rate high | `x402_settle_total{result=~"error\|failed"}` > 10% over 5min |
-| Permit expired attempts | `x402_settle_total{result="expired"}` > 0 |
-| Health down | `/health` unreachable |
+| Settle failure rate high | Non-success rate > 10% over 5min |
+| RPC errors spiking | 3+ RPC failures in 5min |
+| Nonce conflicts detected | Any nonce collision |
+| Permit expired attempts | Any expired permit settle |
+| Signature errors spiking | 3+ invalid signatures in 5min |
+| Health down | No facilitator logs for 10min |
 
 ## Development
 
 ```bash
 npm run dev           # watch mode (auto-restart)
-npm test              # run tests (178 tests)
+npm test              # run tests (187 tests)
 npm run build         # compile TypeScript
 npm start             # production
 fly deploy            # deploy to Fly.io
