@@ -262,16 +262,16 @@ export async function settlePayment(req: Request, res: Response) {
       });
     }
 
-    // Nonce replay protection — reject if we've already settled this exact permit
-    if (nonceTracker.hasSettled(network, owner, nonce)) {
-      log.warn({ payer: owner, network, nonce, errorReason: 'nonce_already_settled' }, 'Nonce already settled (replay rejected)');
+    // Nonce replay protection — if already settled, return the original success response (idempotent)
+    const previousSettlement = nonceTracker.getSettled(network, owner, nonce);
+    if (previousSettlement) {
+      log.info({ payer: owner, network, nonce, txHash: previousSettlement.txHash }, 'Idempotent replay — returning original settlement');
       settleTotal.inc({ network, result: 'replay' });
       return res.json({
-        success: false,
-        payer: owner,
-        transaction: '',
-        network,
-        errorReason: 'nonce_already_settled',
+        success: true,
+        payer: previousSettlement.payer,
+        transaction: previousSettlement.txHash,
+        network: previousSettlement.network,
       });
     }
 
@@ -503,6 +503,8 @@ export async function settlePayment(req: Request, res: Response) {
               await new Promise(r => setTimeout(r, 1000));
               continue;
             }
+            // Attach the permit hash so the caller can debug on-chain
+            err.permitHash = permitHash;
             throw err;
           }
         }
@@ -531,8 +533,8 @@ export async function settlePayment(req: Request, res: Response) {
       log.info({ action: 'settle', network, payer: owner, txHash, success: true, mode: 'simulated' }, 'Simulated settlement complete');
     }
 
-    // Mark nonce as settled to prevent replay
-    nonceTracker.markSettled(network, owner, nonce);
+    // Mark nonce as settled with tx hash for idempotent replay
+    nonceTracker.markSettled(network, owner, nonce, { txHash, payer: owner, network });
     settleTotal.inc({ network, result: 'success' });
     recordDuration(startTime, network);
 
@@ -583,14 +585,17 @@ export async function settlePayment(req: Request, res: Response) {
       errorReason = msg.slice(0, 300);
     }
 
-    log.error({ err: error, action: 'settle', network, payer, errorCategory, errorReason }, `Settlement error: ${errorCategory}`);
+    // Include partial tx hash if permit succeeded but transferFrom failed
+    const partialTxHash = error?.permitHash || '';
+
+    log.error({ err: error, action: 'settle', network, payer, errorCategory, errorReason, permitHash: partialTxHash || undefined }, `Settlement error: ${errorCategory}`);
     settleTotal.inc({ network, result: errorCategory });
     recordDuration(startTime, network);
 
     res.status(200).json({
       success: false,
       payer,
-      transaction: '',
+      transaction: partialTxHash,
       network,
       errorReason,
     });

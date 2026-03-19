@@ -792,17 +792,18 @@ describe('POST /settle - x402 V2 Spec Compliance', () => {
   });
 
   describe('Replay Attack Scenarios', () => {
-    it('should reject second settle with same nonce (replay protection)', async () => {
+    it('should return original tx hash on replay (idempotent)', async () => {
       const paymentPayload = createBasePayment({ nonce: 'replay-test-' + Date.now() });
       const paymentRequirements = createPaymentRequirements('eip155:8453');
 
       const response1 = await sendSettle(app, paymentPayload, paymentRequirements);
       const response2 = await sendSettle(app, paymentPayload, paymentRequirements);
 
-      // First may succeed or fail for other reasons, but second must be rejected as replay
+      // First may succeed or fail for other reasons, but if it succeeded,
+      // replay must return success with the same tx hash (idempotent)
       if (response1.body.success) {
-        expect(response2.body.success).toBe(false);
-        expect(response2.body.errorReason).toBe('nonce_already_settled');
+        expect(response2.body.success).toBe(true);
+        expect(response2.body.transaction).toBe(response1.body.transaction);
       }
     }, 15000);
   });

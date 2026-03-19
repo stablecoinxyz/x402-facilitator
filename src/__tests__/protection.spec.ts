@@ -73,45 +73,56 @@ describe('Nonce Replay Protection', () => {
     });
 
     it('should return true after marking nonce as settled', () => {
-      tracker.markSettled('eip155:8453', '0xabc', '12345');
+      tracker.markSettled('eip155:8453', '0xabc', '12345', { txHash: '0xtx1', payer: '0xabc', network: 'eip155:8453' });
       expect(tracker.hasSettled('eip155:8453', '0xabc', '12345')).toBe(true);
     });
 
+    it('should return stored record via getSettled', () => {
+      const record = { txHash: '0xdeadbeef', payer: '0xabc', network: 'eip155:8453' };
+      tracker.markSettled('eip155:8453', '0xabc', '99999', record);
+      expect(tracker.getSettled('eip155:8453', '0xabc', '99999')).toEqual(record);
+    });
+
+    it('should return undefined for unsettled nonce via getSettled', () => {
+      expect(tracker.getSettled('eip155:8453', '0xabc', 'never')).toBeUndefined();
+    });
+
     it('should distinguish different nonces from same owner', () => {
-      tracker.markSettled('eip155:8453', '0xabc', '11111');
+      tracker.markSettled('eip155:8453', '0xabc', '11111', { txHash: '0xtx2', payer: '0xabc', network: 'eip155:8453' });
       expect(tracker.hasSettled('eip155:8453', '0xabc', '11111')).toBe(true);
       expect(tracker.hasSettled('eip155:8453', '0xabc', '22222')).toBe(false);
     });
 
     it('should distinguish same nonce on different networks', () => {
-      tracker.markSettled('eip155:8453', '0xabc', '12345');
+      tracker.markSettled('eip155:8453', '0xabc', '12345', { txHash: '0xtx3', payer: '0xabc', network: 'eip155:8453' });
       expect(tracker.hasSettled('eip155:8453', '0xabc', '12345')).toBe(true);
       expect(tracker.hasSettled('eip155:84532', '0xabc', '12345')).toBe(false);
     });
 
     it('should distinguish same nonce from different owners', () => {
-      tracker.markSettled('eip155:8453', '0xabc', '12345');
+      tracker.markSettled('eip155:8453', '0xabc', '12345', { txHash: '0xtx4', payer: '0xabc', network: 'eip155:8453' });
       expect(tracker.hasSettled('eip155:8453', '0xdef', '12345')).toBe(false);
     });
 
     it('should be case-insensitive for addresses', () => {
-      tracker.markSettled('eip155:8453', '0xABC', '12345');
+      tracker.markSettled('eip155:8453', '0xABC', '12345', { txHash: '0xtx5', payer: '0xABC', network: 'eip155:8453' });
       expect(tracker.hasSettled('eip155:8453', '0xabc', '12345')).toBe(true);
     });
 
     it('should evict old entries after max size', () => {
       const smallTracker = new NonceTracker(3);
-      smallTracker.markSettled('eip155:8453', '0xa', '1');
-      smallTracker.markSettled('eip155:8453', '0xa', '2');
-      smallTracker.markSettled('eip155:8453', '0xa', '3');
+      const r = (n: string) => ({ txHash: `0x${n}`, payer: '0xa', network: 'eip155:8453' });
+      smallTracker.markSettled('eip155:8453', '0xa', '1', r('1'));
+      smallTracker.markSettled('eip155:8453', '0xa', '2', r('2'));
+      smallTracker.markSettled('eip155:8453', '0xa', '3', r('3'));
       // Adding 4th should evict the 1st
-      smallTracker.markSettled('eip155:8453', '0xa', '4');
+      smallTracker.markSettled('eip155:8453', '0xa', '4', r('4'));
       expect(smallTracker.hasSettled('eip155:8453', '0xa', '1')).toBe(false);
       expect(smallTracker.hasSettled('eip155:8453', '0xa', '4')).toBe(true);
     });
 
     it('should track Solana nonces too', () => {
-      tracker.markSettled('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'DYw8jCTf...', '99999');
+      tracker.markSettled('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'DYw8jCTf...', '99999', { txHash: '0xsol1', payer: 'DYw8jCTf...', network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' });
       expect(tracker.hasSettled('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'DYw8jCTf...', '99999')).toBe(true);
     });
   });
@@ -131,7 +142,7 @@ describe('Nonce Replay Protection', () => {
       mockEstimateGas.mockReset().mockResolvedValue(100000n);
     });
 
-    it('should reject duplicate settle with same nonce', async () => {
+    it('should return original tx hash on duplicate settle (idempotent)', async () => {
       const nonce = Date.now().toString();
       const paymentPayload = createBasePayment({ nonce });
       const paymentRequirements = createPaymentRequirements('eip155:8453');
@@ -141,13 +152,14 @@ describe('Nonce Replay Protection', () => {
         .post('/settle')
         .send({ paymentPayload, paymentRequirements });
 
-      // Second settle with same nonce should be rejected
+      // Second settle with same nonce should return original success
       const response2 = await request(app)
         .post('/settle')
         .send({ paymentPayload, paymentRequirements });
 
-      expect(response2.body.success).toBe(false);
-      expect(response2.body.errorReason).toBe('nonce_already_settled');
+      expect(response1.body.success).toBe(true);
+      expect(response2.body.success).toBe(true);
+      expect(response2.body.transaction).toBe(response1.body.transaction);
     }, 15000);
 
     it('should allow settle with different nonces from same owner', async () => {
