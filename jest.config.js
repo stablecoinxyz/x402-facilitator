@@ -11,6 +11,9 @@ module.exports = {
   setupFiles: ['./jest.setup.js'],
   preset: 'ts-jest',
   testEnvironment: 'node',
+  // Isolate each test file in its own worker to prevent Solana RPC rate limit
+  // state from leaking across suites and causing flaky failures.
+  maxWorkers: 1,
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts', '**/*.spec.ts'],
   collectCoverageFrom: [
