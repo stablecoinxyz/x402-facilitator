@@ -8,6 +8,7 @@ process.env.BASE_SEPOLIA_FACILITATOR_PRIVATE_KEY = process.env.BASE_SEPOLIA_FACI
 process.env.BASE_SEPOLIA_FACILITATOR_ADDRESS = process.env.BASE_SEPOLIA_FACILITATOR_ADDRESS || '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 
 module.exports = {
+  setupFiles: ['./jest.setup.js'],
   preset: 'ts-jest',
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
