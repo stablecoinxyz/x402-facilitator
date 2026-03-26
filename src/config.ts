@@ -30,7 +30,7 @@ export const config = {
   radiusRpcUrl: process.env.RADIUS_RPC_URL || 'https://rpc.radiustech.xyz',
   radiusFacilitatorPrivateKey: process.env.RADIUS_FACILITATOR_PRIVATE_KEY || '',
   radiusFacilitatorAddress: process.env.RADIUS_FACILITATOR_ADDRESS || '',
-  radiusChainId: parseInt(process.env.RADIUS_CHAIN_ID || '723'),
+  radiusChainId: parseInt(process.env.RADIUS_CHAIN_ID || '723487'),
   radiusSbcTokenAddress: process.env.RADIUS_SBC_TOKEN_ADDRESS || '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb',
   radiusSbcDecimals: parseInt(process.env.RADIUS_SBC_DECIMALS || '6'),
 
@@ -65,7 +65,7 @@ export function resolveToken(chainId: number, asset: string): { address: string;
     if (a === config.baseSepoliaSbcTokenAddress.toLowerCase()) return { address: config.baseSepoliaSbcTokenAddress, decimals: config.baseSepoliaSbcDecimals, name: 'Stable Coin', version: '1' };
     if (a === config.baseSepoliaUsdcTokenAddress.toLowerCase()) return { address: config.baseSepoliaUsdcTokenAddress, decimals: config.baseSepoliaUsdcDecimals, name: 'USDC', version: '2' };
   }
-  if (chainId === config.radiusChainId) {
+  if (chainId === config.radiusChainId || chainId === 723 || chainId === 723487) {
     if (a === config.radiusSbcTokenAddress.toLowerCase()) return { address: config.radiusSbcTokenAddress, decimals: config.radiusSbcDecimals, name: 'Stable Coin', version: '1' };
   }
   if (chainId === config.radiusTestnetChainId) {

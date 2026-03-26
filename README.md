@@ -12,7 +12,7 @@ Uses ERC-2612 Permit for EVM chains (SBC token doesn't support EIP-3009) and del
 |---------|-----------|-----------|-----------|
 | Base | `eip155:8453` | `BASE_` | ERC-2612 Permit + TransferFrom |
 | Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | ERC-2612 Permit + TransferFrom |
-| Radius | `eip155:723` | `RADIUS_` | ERC-2612 Permit + TransferFrom |
+| Radius | `eip155:723487` | `RADIUS_` | ERC-2612 Permit + TransferFrom |
 | Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | ERC-2612 Permit + TransferFrom |
 | Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | `SOLANA_` | Delegated SPL token transfer |
 

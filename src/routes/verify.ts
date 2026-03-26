@@ -55,7 +55,7 @@ function resolveEvmNetwork(network: string) {
       decimals: config.baseSepoliaSbcDecimals,
     };
   }
-  if (chainId === config.radiusChainId) {
+  if (chainId === config.radiusChainId || chainId === 723 || chainId === 723487) {
     return {
       label: 'Radius Mainnet',
       chainId: config.radiusChainId,
@@ -82,7 +82,7 @@ function resolveEvmFacilitatorAddress(network: string): string | null {
   if (chainId === null) return null;
   if (chainId === config.baseChainId) return config.baseFacilitatorAddress;
   if (chainId === config.baseSepoliaChainId) return config.baseSepoliaFacilitatorAddress;
-  if (chainId === config.radiusChainId) return config.radiusFacilitatorAddress;
+  if (chainId === config.radiusChainId || chainId === 723 || chainId === 723487) return config.radiusFacilitatorAddress;
   if (chainId === config.radiusTestnetChainId) return config.radiusTestnetFacilitatorAddress;
   return null;
 }

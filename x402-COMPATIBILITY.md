@@ -141,7 +141,7 @@ The facilitator accepts both v1 (flat) and v2 (envelope) payloads:
 | -------------- | ----------------------------------------- | ------------------------------ | ------ |
 | Base mainnet   | `eip155:8453`                             | ERC-2612 Permit + TransferFrom | ✓ Live |
 | Base Sepolia   | `eip155:84532`                            | ERC-2612 Permit + TransferFrom | ✓ Live |
-| Radius mainnet | `eip155:723`                              | ERC-2612 Permit + TransferFrom | ✓ Live |
+| Radius mainnet | `eip155:723487`                            | ERC-2612 Permit + TransferFrom | ✓ Live |
 | Radius testnet | `eip155:72344`                            | ERC-2612 Permit + TransferFrom | ✓ Live |
 | Solana mainnet | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Delegated SPL transfer         | ✓ Live |
 

@@ -49,11 +49,11 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   radius: {
     name: "Radius (Mainnet)",
     cliName: "radius",
-    chainId: 723,
+    chainId: 723487,
     rpcUrl: "https://rpc.radiustech.xyz",
     sbcAddress: "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb",
     sbcDecimals: 6,
-    networkId: "eip155:723",
+    networkId: "eip155:723487",
     explorerTxUrl: null,
     extra: { assetTransferMethod: "erc2612", name: "Stable Coin", version: "1" },
   },

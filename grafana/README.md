@@ -65,7 +65,7 @@ Complete observability for the x402 facilitator: structured logs, Prometheus met
 {app="sbc-x402-facilitator"} | json | level="error"
 
 # Errors on a specific network
-{app="sbc-x402-facilitator"} | json | level="error" | network="eip155:723"
+{app="sbc-x402-facilitator"} | json | level="error" | network="eip155:723487"
 
 # Trace a specific request
 {app="sbc-x402-facilitator"} | json | requestId="<uuid>"

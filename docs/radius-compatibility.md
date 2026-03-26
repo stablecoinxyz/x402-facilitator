@@ -1,6 +1,6 @@
 # Radius Chain Compatibility
 
-**Last tested:** 2026-03-09 on Radius mainnet (eip155:723)
+**Last tested:** 2026-03-09 on Radius mainnet (eip155:723487)
 
 ## Summary
 
@@ -47,7 +47,7 @@ Legacy transactions need one fee param (`gasPrice`), EIP-1559 needs two (`maxFee
 
 | Method | Status | Notes |
 |--------|--------|-------|
-| `eth_chainId` | ✅ | Returns 0x2d3 (723) |
+| `eth_chainId` | ✅ | Returns 0xb09df (723487) |
 | `eth_gasPrice` | ✅ | ~0.986 gwei |
 | `eth_getBalance` | ✅ | Returns RUSD balance |
 | `eth_call` | ✅ | Contract reads work |
@@ -60,7 +60,7 @@ Legacy transactions need one fee param (`gasPrice`), EIP-1559 needs two (`maxFee
 ## Facilitator Code Path
 
 ```
-settle request for eip155:723 or eip155:72344
+settle request for eip155:723487 (or legacy eip155:723) or eip155:72344
   → isRadius = true
   → gasPrice = eth_gasPrice() + 1 gwei
   → skip gas estimation (eth_estimateGas broken)
