@@ -59,7 +59,7 @@ function resolveEvmNetwork(network: string) {
       testnet: true,
     };
   }
-  if (chainId === config.radiusChainId || chainId === 723 || chainId === 723487) {
+  if (chainId === config.radiusChainId || chainId === 723487) {
     return {
       label: 'Radius Mainnet',
       chainId: config.radiusChainId,

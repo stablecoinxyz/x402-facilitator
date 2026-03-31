@@ -38,9 +38,8 @@ export function getSupportedNetworks(req: Request, res: Response) {
     addSigner(signers, 'eip155:*', config.baseSepoliaFacilitatorAddress);
   }
 
-  // Add Radius Mainnet if configured (both old chain ID 723 and new 723487 during transition)
+  // Add Radius Mainnet if configured
   if (config.radiusFacilitatorAddress && config.radiusFacilitatorPrivateKey) {
-    addKind('eip155:723', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
     addKind('eip155:723487', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
     addSigner(signers, 'eip155:*', config.radiusFacilitatorAddress);
   }
@@ -71,7 +70,6 @@ export function getSupportedNetworks(req: Request, res: Response) {
 const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
   'eip155:8453': { name: 'Base', type: 'Mainnet' },
   'eip155:84532': { name: 'Base Sepolia', type: 'Testnet' },
-  'eip155:723': { name: 'Radius (legacy)', type: 'Mainnet' },
   'eip155:723487': { name: 'Radius', type: 'Mainnet' },
   'eip155:72344': { name: 'Radius', type: 'Testnet' },
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { name: 'Solana', type: 'Mainnet' },

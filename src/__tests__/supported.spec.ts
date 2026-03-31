@@ -63,7 +63,6 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       const validNetworks = [
         'eip155:8453',
         'eip155:84532',
-        'eip155:723',
         'eip155:723487',
         'eip155:72344',
         'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
