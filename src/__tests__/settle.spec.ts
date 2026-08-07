@@ -318,9 +318,22 @@ describe('POST /settle - x402 V2 Spec Compliance', () => {
       expect(response.body.errorReason).toBe('invalid_network');
     });
 
-    it('should reject legacy network names', async () => {
+    it('should accept v1 network names and resolve them to the right chain', async () => {
       const paymentPayload = createBasePayment();
       paymentPayload.accepted.network = 'base';
+      const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+      const response = await sendSettle(app, paymentPayload, paymentRequirements);
+
+      // "base" is the x402 v1 identifier for eip155:8453 — resolvable, not invalid
+      expect(response.body.errorReason).not.toBe('invalid_network');
+      // Response echoes the resolved CAIP-2 form
+      expect(response.body.network).toBe('eip155:8453');
+    });
+
+    it('should still reject a network name that maps to no configured chain', async () => {
+      const paymentPayload = createBasePayment();
+      paymentPayload.accepted.network = 'avalanche';
       const paymentRequirements = createPaymentRequirements('eip155:8453');
 
       const response = await sendSettle(app, paymentPayload, paymentRequirements);

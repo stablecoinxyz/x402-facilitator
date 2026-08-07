@@ -54,22 +54,22 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       });
     });
 
-    it('should only include configured networks with CAIP-2 identifiers', async () => {
+    it('should only include configured networks, under the identifier its version uses', async () => {
       const response = await request(app).get('/supported');
 
-      const networks = response.body.kinds.map((k: any) => k.network);
-
-      // Valid CAIP-2 network identifiers
-      const validNetworks = [
+      // v2 kinds carry CAIP-2; v1 kinds carry the plain name a v1 client can send back
+      const validV2Networks = [
         'eip155:8453',
         'eip155:84532',
         'eip155:723487',
         'eip155:72344',
         'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
       ];
+      const validV1Networks = ['base', 'base-sepolia', 'radius', 'radius-testnet', 'solana-mainnet-beta'];
 
-      networks.forEach((network: string) => {
-        expect(validNetworks).toContain(network);
+      response.body.kinds.forEach((kind: any) => {
+        const valid = kind.x402Version === 1 ? validV1Networks : validV2Networks;
+        expect(valid).toContain(kind.network);
       });
     });
 
@@ -92,45 +92,44 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
   });
 
   describe('Capability Discovery', () => {
-    it('should include Base mainnet with CAIP-2 if configured (v1 + v2)', async () => {
+    /** Kinds for one network, keyed by the identifier each version advertises. */
+    function kindsFor(body: any, caip2: string, v1Name: string) {
+      return {
+        v2: body.kinds?.filter((k: any) => k.network === caip2 && k.x402Version === 2 && k.scheme === 'exact') ?? [],
+        v1: body.kinds?.filter((k: any) => k.network === v1Name && k.x402Version === 1 && k.scheme === 'exact') ?? [],
+      };
+    }
+
+    it('should include Base mainnet under both identifiers if configured', async () => {
       const response = await request(app).get('/supported');
+      const { v2, v1 } = kindsFor(response.body, 'eip155:8453', 'base');
 
-      const baseKinds = response.body.kinds?.filter(
-        (k: any) => k.network === 'eip155:8453' && k.scheme === 'exact'
-      );
-
-      if (baseKinds?.length > 0) {
-        // SBC + USDC, each with v1 + v2 = 4 kinds
-        const versions = baseKinds.map((k: any) => k.x402Version).sort();
-        expect(versions).toEqual([1, 1, 2, 2]);
-        expect(baseKinds[0].extra.assetTransferMethod).toBe('erc2612');
+      if (v2.length > 0) {
+        // SBC + USDC under each version
+        expect(v2).toHaveLength(2);
+        expect(v1).toHaveLength(2);
+        expect(v2[0].extra.assetTransferMethod).toBe('erc2612');
+        expect(v1[0].extra.assetTransferMethod).toBe('erc2612');
       }
     });
 
-    it('should include Base Sepolia with CAIP-2 if configured (v1 + v2)', async () => {
+    it('should include Base Sepolia under both identifiers if configured', async () => {
       const response = await request(app).get('/supported');
+      const { v2, v1 } = kindsFor(response.body, 'eip155:84532', 'base-sepolia');
 
-      const sepoliaKinds = response.body.kinds?.filter(
-        (k: any) => k.network === 'eip155:84532' && k.scheme === 'exact'
-      );
-
-      if (sepoliaKinds?.length > 0) {
-        // SBC + USDC, each with v1 + v2 = 4 kinds
-        const versions = sepoliaKinds.map((k: any) => k.x402Version).sort();
-        expect(versions).toEqual([1, 1, 2, 2]);
+      if (v2.length > 0) {
+        expect(v2).toHaveLength(2);
+        expect(v1).toHaveLength(2);
       }
     });
 
-    it('should include Solana mainnet with CAIP-2 if configured (v1 + v2)', async () => {
+    it('should include Solana mainnet under both identifiers if configured', async () => {
       const response = await request(app).get('/supported');
+      const { v2, v1 } = kindsFor(response.body, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'solana-mainnet-beta');
 
-      const solanaKinds = response.body.kinds?.filter(
-        (k: any) => k.network === 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' && k.scheme === 'exact'
-      );
-
-      if (solanaKinds?.length > 0) {
-        const versions = solanaKinds.map((k: any) => k.x402Version).sort();
-        expect(versions).toEqual([1, 2]);
+      if (v2.length > 0) {
+        expect(v2).toHaveLength(1);
+        expect(v1).toHaveLength(1);
       }
     });
   });
@@ -166,20 +165,36 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
     });
   });
 
-  describe('Network Name Format (CAIP-2)', () => {
-    it('should use CAIP-2 identifiers (not legacy network names)', async () => {
+  describe('Network Name Format (per-version)', () => {
+    it('should advertise v2 kinds with CAIP-2 identifiers', async () => {
       const response = await request(app).get('/supported');
+      const v2Kinds = response.body.kinds?.filter((k: any) => k.x402Version === 2);
 
-      response.body.kinds?.forEach((kind: any) => {
+      expect(v2Kinds.length).toBeGreaterThan(0);
+      v2Kinds.forEach((kind: any) => {
         // Should be CAIP-2 like "eip155:8453", not "base" or "8453"
-        expect(kind.network).not.toBe('base');
-        expect(kind.network).not.toBe('base-sepolia');
-        expect(kind.network).not.toBe('8453');
-        expect(kind.network).not.toBe('84532');
-
-        // Should match CAIP-2 pattern
         expect(kind.network).toMatch(/^(eip155:\d+|solana:.+)$/);
       });
+    });
+
+    it('should advertise v1 kinds with plain names, never CAIP-2', async () => {
+      const response = await request(app).get('/supported');
+      const v1Kinds = response.body.kinds?.filter((k: any) => k.x402Version === 1);
+
+      expect(v1Kinds.length).toBeGreaterThan(0);
+      v1Kinds.forEach((kind: any) => {
+        // A v1 client cannot send CAIP-2 back — its own spec doesn't allow it.
+        expect(kind.network).not.toContain(':');
+        expect(kind.network).toMatch(/^[a-z0-9-]+$/);
+      });
+    });
+
+    it('should advertise every network under both a v1 and a v2 identifier', async () => {
+      const response = await request(app).get('/supported');
+      const v1Count = response.body.kinds.filter((k: any) => k.x402Version === 1).length;
+      const v2Count = response.body.kinds.filter((k: any) => k.x402Version === 2).length;
+
+      expect(v1Count).toBe(v2Count);
     });
   });
 

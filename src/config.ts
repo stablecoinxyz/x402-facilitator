@@ -50,6 +50,57 @@ export const config = {
   sbcDecimals: 9,
 };
 
+/** CAIP-2 identifier for Solana mainnet (truncated genesis hash). */
+export const SOLANA_MAINNET_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+
+/**
+ * x402 v1 identifies networks by plain name ("base"); v2 uses CAIP-2 ("eip155:8453").
+ * See specs/x402-specification-v1.md §11.1 and specs/x402-specification-v2.md.
+ *
+ * Canonical v1 name → CAIP-2. Chain IDs are read from config so the two stay in
+ * sync when BASE_CHAIN_ID / RADIUS_CHAIN_ID are overridden.
+ *
+ * `base` and `base-sepolia` are spec-defined. Radius and Solana have no v1 spec
+ * name — these match the names the SBC reference facilitator emits.
+ */
+const V1_NETWORK_TO_CAIP2: Record<string, string> = {
+  'base': `eip155:${config.baseChainId}`,
+  'base-sepolia': `eip155:${config.baseSepoliaChainId}`,
+  'radius': `eip155:${config.radiusChainId}`,
+  'radius-testnet': `eip155:${config.radiusTestnetChainId}`,
+  'solana-mainnet-beta': SOLANA_MAINNET_CAIP2,
+};
+
+/** Additional inbound spellings we accept but never advertise. */
+const V1_NETWORK_ALIASES: Record<string, string> = {
+  'solana': SOLANA_MAINNET_CAIP2,
+  'solana-mainnet': SOLANA_MAINNET_CAIP2,
+};
+
+/**
+ * Normalize any incoming network identifier to CAIP-2.
+ *
+ * Already-CAIP-2 values pass through untouched. Unrecognized values are returned
+ * as-is so the caller's error response and metrics show what the client actually
+ * sent rather than a masked 'unknown'.
+ */
+export function toCaip2Network(network: unknown): string {
+  if (typeof network !== 'string' || network === '') return 'unknown';
+  if (network.includes(':')) return network;
+  const key = network.toLowerCase();
+  return V1_NETWORK_TO_CAIP2[key] || V1_NETWORK_ALIASES[key] || network;
+}
+
+/**
+ * Reverse lookup: CAIP-2 → canonical v1 name, or null if this network has no v1
+ * name. Used by /supported so v1 clients discover a network identifier they can
+ * actually send back to us.
+ */
+export function toV1Network(caip2: string): string | null {
+  const entry = Object.entries(V1_NETWORK_TO_CAIP2).find(([, v]) => v === caip2);
+  return entry ? entry[0] : null;
+}
+
 /**
  * Resolve an asset address to token config for a given EVM chain.
  * Returns null if the asset is not whitelisted for that chain.

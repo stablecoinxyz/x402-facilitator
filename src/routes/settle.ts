@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { createWalletClient, createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
-import { config, resolveToken } from '../config';
+import { config, resolveToken, toCaip2Network } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
@@ -178,7 +178,8 @@ export async function settlePayment(req: Request, res: Response) {
     }
     paymentRequirements = normalizeRequirements(paymentRequirements);
 
-    network = paymentPayload.accepted?.network || 'unknown';
+    // v1 clients send plain names ("base"); everything downstream expects CAIP-2.
+    network = toCaip2Network(paymentPayload.accepted?.network);
     const scheme = paymentPayload.accepted?.scheme;
 
     log.debug({ scheme, network }, 'Payment details');
@@ -550,7 +551,8 @@ export async function settlePayment(req: Request, res: Response) {
     let payer = 'unknown';
     try {
       payer = req.body.paymentPayload?.payload?.authorization?.from || 'unknown';
-      network = req.body.paymentPayload?.accepted?.network || network;
+      const rawNetwork = req.body.paymentPayload?.accepted?.network;
+      if (rawNetwork) network = toCaip2Network(rawNetwork);
     } catch {}
 
     // Categorize the error for precise metrics

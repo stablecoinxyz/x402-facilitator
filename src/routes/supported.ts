@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { config } from '../config';
+import { config, toV1Network } from '../config';
 
 /**
  * GET /supported - x402 V2 Capability Discovery
@@ -18,10 +18,16 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // Collect configured signer addresses keyed by CAIP-2 namespace
   const signers: Record<string, string[]> = {};
 
-  // Helper: push both v2 and v1 kind entries for a network
+  // Helper: push both v2 and v1 kind entries for a network.
+  // v2 advertises CAIP-2; v1 advertises the plain name, because that is what a v1
+  // client will send back in paymentRequirements.network. Advertising CAIP-2 on a
+  // v1 kind gives the client an identifier its own spec doesn't allow it to use.
   function addKind(network: string, extra: { assetTransferMethod: string; name: string; version: string }) {
     kinds.push({ x402Version: 2, scheme: 'exact', network, extra });
-    kinds.push({ x402Version: 1, scheme: 'exact', network, extra });
+    const v1Name = toV1Network(network);
+    if (v1Name) {
+      kinds.push({ x402Version: 1, scheme: 'exact', network: v1Name, extra });
+    }
   }
 
   // Add Base Mainnet if configured
@@ -67,12 +73,19 @@ export function getSupportedNetworks(req: Request, res: Response) {
   }
 }
 
+// Keyed by both the v2 (CAIP-2) and v1 (plain name) identifiers, since /supported
+// now advertises each network under both.
 const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
   'eip155:8453': { name: 'Base', type: 'Mainnet' },
   'eip155:84532': { name: 'Base Sepolia', type: 'Testnet' },
   'eip155:723487': { name: 'Radius', type: 'Mainnet' },
   'eip155:72344': { name: 'Radius', type: 'Testnet' },
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { name: 'Solana', type: 'Mainnet' },
+  'base': { name: 'Base', type: 'Mainnet' },
+  'base-sepolia': { name: 'Base Sepolia', type: 'Testnet' },
+  'radius': { name: 'Radius', type: 'Mainnet' },
+  'radius-testnet': { name: 'Radius', type: 'Testnet' },
+  'solana-mainnet-beta': { name: 'Solana', type: 'Mainnet' },
 };
 
 function renderSupportedHTML(data: {
@@ -90,7 +103,7 @@ function renderSupportedHTML(data: {
           <span class="badge ${isMainnet ? 'badge-main' : 'badge-test'}">${label.type}</span>
         </div>
         <div class="card-rows">
-          <div class="row"><span class="label">CAIP-2</span><code>${k.network}</code></div>
+          <div class="row"><span class="label">${k.network.includes(':') ? 'CAIP-2' : 'Network'}</span><code>${k.network}</code></div>
           <div class="row"><span class="label">Scheme</span><span>${k.scheme}</span></div>
           <div class="row"><span class="label">Transfer</span><span>${k.extra.assetTransferMethod}</span></div>
           <div class="row"><span class="label">Token</span><span>${k.extra.name} v${k.extra.version}</span></div>

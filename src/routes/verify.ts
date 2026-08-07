@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { createPublicClient, http, verifyTypedData } from 'viem';
 import type { Logger } from 'pino';
-import { config, resolveToken } from '../config';
+import { config, resolveToken, toCaip2Network } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
@@ -188,7 +188,8 @@ export async function verifyPayment(req: Request, res: Response) {
     }
     paymentRequirements = normalizeRequirements(paymentRequirements);
 
-    network = paymentPayload.accepted?.network || 'unknown';
+    // v1 clients send plain names ("base"); everything downstream expects CAIP-2.
+    network = toCaip2Network(paymentPayload.accepted?.network);
     const scheme = paymentPayload.accepted?.scheme;
 
     log.debug({ scheme, network }, 'Payment details');

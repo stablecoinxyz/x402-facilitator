@@ -128,8 +128,12 @@ async function testSupported() {
   const allExact = kinds.every((k: any) => k.scheme === 'exact');
   allExact ? pass('all kinds use scheme: "exact"') : fail('all kinds use scheme: "exact"', 'some differ');
 
-  const allCaip2 = kinds.every((k: any) => /^(eip155:|solana:)/.test(k.network));
-  allCaip2 ? pass('all kinds use CAIP-2 network IDs') : fail('all kinds use CAIP-2 network IDs', 'bare chain IDs found');
+  // v2 kinds carry CAIP-2; v1 kinds carry the plain name a v1 client can send back
+  const allV2Caip2 = kinds.filter((k: any) => k.x402Version === 2).every((k: any) => /^(eip155:|solana:)/.test(k.network));
+  allV2Caip2 ? pass('all v2 kinds use CAIP-2 network IDs') : fail('all v2 kinds use CAIP-2 network IDs', 'bare chain IDs found');
+
+  const allV1Plain = kinds.filter((k: any) => k.x402Version === 1).every((k: any) => !k.network.includes(':'));
+  allV1Plain ? pass('all v1 kinds use plain network names') : fail('all v1 kinds use plain network names', 'CAIP-2 found on a v1 kind');
 
   const allHaveMethod = kinds.every((k: any) => k.extra?.assetTransferMethod);
   allHaveMethod ? pass('all kinds have extra.assetTransferMethod') : fail('all kinds have extra.assetTransferMethod', 'missing');
