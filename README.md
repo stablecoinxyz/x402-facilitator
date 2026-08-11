@@ -15,6 +15,8 @@ Uses ERC-2612 Permit for EVM chains (SBC token doesn't support EIP-3009) and del
 | Radius | `eip155:723487` | `RADIUS_` | ERC-2612 Permit + TransferFrom |
 | Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | ERC-2612 Permit + TransferFrom |
 | Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | `SOLANA_` | Delegated SPL token transfer |
+| Casper | `casper:casper` | `CASPER_` | wCSPR (CEP-18) transfer via Casper facilitator |
+| Casper Testnet | `casper:casper-test` | `CASPER_TESTNET_` | wCSPR (CEP-18) transfer via Casper facilitator |
 
 Each network has its own env vars — mainnets and testnets can be configured simultaneously.
 
