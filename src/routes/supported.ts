@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { config, toV1Network } from '../config';
+import { CASPER_MAINNET_CAIP2, CASPER_TESTNET_CAIP2 } from '../casper/networks';
 
 /**
  * GET /supported - x402 V2 Capability Discovery
@@ -62,6 +63,18 @@ export function getSupportedNetworks(req: Request, res: Response) {
     addSigner(signers, 'solana:*', config.solanaFacilitatorAddress);
   }
 
+  // Add Casper mainnet if configured
+  if (config.casperFacilitatorAddress && config.casperWcsprContract) {
+    addKind(CASPER_MAINNET_CAIP2, { assetTransferMethod: 'cep18-transfer', name: 'wCSPR', version: '1' });
+    addSigner(signers, 'casper:*', config.casperFacilitatorAddress);
+  }
+
+  // Add Casper testnet if configured
+  if (config.casperFacilitatorAddress && config.casperTestnetWcsprContract) {
+    addKind(CASPER_TESTNET_CAIP2, { assetTransferMethod: 'cep18-transfer', name: 'wCSPR', version: '1' });
+    addSigner(signers, 'casper:*', config.casperFacilitatorAddress);
+  }
+
   const data = { kinds, extensions: [], signers };
 
   // If browser, render HTML; otherwise return JSON for machines
@@ -81,11 +94,15 @@ const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
   'eip155:723487': { name: 'Radius', type: 'Mainnet' },
   'eip155:72344': { name: 'Radius', type: 'Testnet' },
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { name: 'Solana', type: 'Mainnet' },
+  'casper:casper': { name: 'Casper', type: 'Mainnet' },
+  'casper:casper-test': { name: 'Casper', type: 'Testnet' },
   'base': { name: 'Base', type: 'Mainnet' },
   'base-sepolia': { name: 'Base Sepolia', type: 'Testnet' },
   'radius': { name: 'Radius', type: 'Mainnet' },
   'radius-testnet': { name: 'Radius', type: 'Testnet' },
   'solana-mainnet-beta': { name: 'Solana', type: 'Mainnet' },
+  'casper': { name: 'Casper', type: 'Mainnet' },
+  'casper-test': { name: 'Casper', type: 'Testnet' },
 };
 
 function renderSupportedHTML(data: {
