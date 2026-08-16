@@ -197,6 +197,22 @@ export async function settlePayment(req: Request, res: Response) {
       });
     }
 
+    // Reject zero-requirement and self-directed payments (EVM + Solana) before any on-chain work.
+    // A zero maxAmountRequired lets a caller force useless 0-value settlements;
+    // from==payTo is a self-transfer that only wastes facilitator gas.
+    const reqAmount = paymentRequirements?.amount ?? '0';
+    const payFrom = paymentPayload.payload?.authorization?.from ?? paymentPayload.payload?.from;
+    if (BigInt(reqAmount) <= 0n) {
+      log.warn({ payer: payFrom ?? 'unknown', network, errorReason: 'invalid_amount' }, 'Zero-value settlement rejected');
+      settleTotal.inc({ network, result: 'failed' });
+      return res.json({ success: false, payer: payFrom ?? 'unknown', transaction: '', network, errorReason: 'invalid_amount' });
+    }
+    if (payFrom && paymentRequirements?.payTo && payFrom.toLowerCase() === String(paymentRequirements.payTo).toLowerCase()) {
+      log.warn({ payer: payFrom, network, errorReason: 'invalid_self_payment' }, 'Self-payment settlement rejected');
+      settleTotal.inc({ network, result: 'failed' });
+      return res.json({ success: false, payer: payFrom, transaction: '', network, errorReason: 'invalid_self_payment' });
+    }
+
     // Route by network — Solana uses CAIP-2 "solana:..." prefix
     if (network?.startsWith('solana:')) {
       log.debug({ network }, 'Solana settlement (delegated transfer)');

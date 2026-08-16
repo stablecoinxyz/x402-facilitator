@@ -205,6 +205,23 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
+    // Reject zero-requirement and self-directed payments (EVM + Solana) before any work.
+    // A zero maxAmountRequired lets a caller force useless 0-value settlements;
+    // from==payTo is a self-transfer that only wastes facilitator gas.
+    // (value-below-requirement is already rejected downstream with the spec code.)
+    const reqAmount = paymentRequirements?.amount ?? '0';
+    const payFrom = paymentPayload.payload?.authorization?.from ?? paymentPayload.payload?.from;
+    if (BigInt(reqAmount) <= 0n) {
+      log.warn({ payer: payFrom ?? 'unknown', network, errorReason: 'invalid_amount' }, 'Zero-value payment rejected');
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: payFrom ?? 'unknown', invalidReason: 'invalid_amount' });
+    }
+    if (payFrom && paymentRequirements?.payTo && payFrom.toLowerCase() === String(paymentRequirements.payTo).toLowerCase()) {
+      log.warn({ payer: payFrom, network, errorReason: 'invalid_self_payment' }, 'Self-payment rejected');
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: payFrom, invalidReason: 'invalid_self_payment' });
+    }
+
     // Route by network — Solana uses CAIP-2 "solana:..." prefix
     if (network?.startsWith('solana:')) {
       log.debug({ network }, 'Solana payment detected');
