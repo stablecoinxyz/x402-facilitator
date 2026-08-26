@@ -54,25 +54,60 @@ Complete observability for the x402 facilitator: structured logs, Prometheus met
 
 ### Useful LogQL queries
 
+**Our log lines are nested twice, so every query needs two `json` stages.**
+Fly wraps each app stdout line in its own envelope and puts the app's text in
+`.message`. Our pino JSON is that text. So the first `| json` parses Fly's
+envelope, `| line_format "{{.message}}"` promotes the inner pino line to be the
+line, and the second `| json` parses that. A single `| json` only ever sees
+Fly's fields (`event`, `fly`, `host`, `log`, `message`, `timestamp`) — it will
+NOT see `action`, `msg`, `payer`, `txHash`, and filters on them silently match
+nothing.
+
+Prefix, used by every query below:
+
 ```
-# All facilitator logs
+{app="sbc-x402-facilitator"} | json | line_format "{{.message}}" | json
+```
+
+```
+# All facilitator logs (raw, both envelopes)
 {app="sbc-x402-facilitator"}
 
 # Settle requests only
-{app="sbc-x402-facilitator"} | json | action="settle"
+{app="sbc-x402-facilitator"} | json | line_format "{{.message}}" | json | action="settle"
 
 # All errors with category
-{app="sbc-x402-facilitator"} | json | level="error"
+{app="sbc-x402-facilitator"} | json | line_format "{{.message}}" | json | level="50"
 
 # Errors on a specific network
-{app="sbc-x402-facilitator"} | json | level="error" | network="eip155:723487"
+{app="sbc-x402-facilitator"} | json | line_format "{{.message}}" | json | level="50" | network="eip155:723487"
 
 # Trace a specific request
-{app="sbc-x402-facilitator"} | json | requestId="<uuid>"
+{app="sbc-x402-facilitator"} | json | line_format "{{.message}}" | json | requestId="<uuid>"
 
 # Successful settlements with tx hash
-{app="sbc-x402-facilitator"} | json | action="settle" | success="true"
+{app="sbc-x402-facilitator"} | json | line_format "{{.message}}" | json | msg="Settlement complete"
+
+# Count lines per app — sanity check that shipping works at all
+sum by (app) (count_over_time({app=~".+"}[6h]))
 ```
+
+Note `level` is pino's numeric level, not a word: `30`=info, `40`=warn,
+`50`=error. `level="error"` matches nothing.
+
+### If a query returns nothing
+
+Check the pipeline is delivering before assuming it is broken:
+
+```
+sum by (app) (count_over_time({app=~".+"}[6h]))
+```
+
+If `sbc-x402-facilitator` appears with a healthy count, logs are arriving and
+the query is at fault — almost always a missing second `json` stage. The
+`sbc-log-shipper` app also runs a `blackhole` sink alongside the Loki one; it is
+part of the upstream image and prints a periodic "Collected events" counter.
+That is normal and does not mean logs are being discarded.
 
 ## Metrics (Prometheus)
 
