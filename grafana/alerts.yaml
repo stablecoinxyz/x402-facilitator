@@ -1,124 +1,110 @@
 # Grafana Alert Rules for x402 Facilitator
 #
-# Import manually via Grafana UI:
-#   Alerts & IRM → Alert rules → + New alert rule
+# GENERATED FROM THE LIVE RULES on 2026-08-26.
+# Regenerate rather than hand-edit, so this file cannot drift from what
+# actually fires:
+#   curl -H "Authorization: Bearer $GRAFANA_TOKEN" \
+#     https://sbclogs.grafana.net/api/v1/provisioning/alert-rules
 #
-# These are reference definitions — copy the PromQL expressions into the Grafana alert rule builder.
+# Stack sbclogs.grafana.net, folder x402, group x402-alerts,
+# datasource grafanacloud-prom, receiver "SBC Tech".
+# Every rule sets noDataState=OK: at this volume a quiet window is normal,
+# and NoData->Alerting would page on silence.
 #
-# Settle result labels, split by whose fault the outcome is.
-# This split is what the alerts key off — do not add a label without placing it.
+# Settle result labels, split by whose fault the outcome is. The split is
+# what the alerts key off — do not add a label without placing it.
 #
-#   OK              success, replay
+#   OK            success, replay
+#   CLIENT FAULT  bad_request, expired, invalid_signature, failed
+#                 Facilitator worked and rejected bad input. Never pages.
+#   OUR FAULT     rpc_error, receipt_timeout, nonce_conflict, gas_error,
+#                 insufficient_allowance, tx_reverted, unknown
 #
-#   CLIENT FAULT    bad_request, expired, invalid_signature, failed
-#                   The facilitator behaved correctly and rejected bad input.
-#                   These must NEVER page. A public endpoint gets scanned; on
-#                   2026-08-26 a bot posting from 0x...0001 produced a run of
-#                   these on its own.
-#
-#   FACILITATOR     rpc_error, receipt_timeout, nonce_conflict, gas_error,
-#   FAULT           insufficient_allowance, tx_reverted, unknown
-#                   Something on our side broke. At current volume a single
-#                   occurrence is worth knowing about.
+# History: the previous "Settle failure rate high" was a ratio with no
+# minimum-volume floor that counted client errors as facilitator failures.
+# At roughly one settle an hour a 5m window holds 0 or 1, so one scanner
+# request read as 100% failure and paged. It was deleted, not tuned — no
+# floor works: high enough to be meaningful means it never evaluates, low
+# enough to evaluate filters nothing. These rules count absolutely instead.
 
 rules:
-  # REPLACES "Settle failure rate high", which was deleted rather than tuned.
-  #
-  # That rule was a ratio with no minimum-volume floor, and it counted client
-  # errors as facilitator failures. At ~0.7 settles/hour a 5m window holds 0 or 1
-  # settle, so one scanner request read as 100% failure and paged. No floor value
-  # fixes it: a floor high enough to be meaningful (n>=20, roughly 30h of traffic
-  # at current volume) means the rule never evaluates, and a floor low enough to
-  # evaluate filters nothing.
-  #
-  # Counting absolutely instead of proportionally is what makes this work at low
-  # volume — one real fault is worth a page, and no amount of junk input is.
-  - name: Settle faults on our side
-    condition: >
-      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown"}[15m])) >= 2
-    for: 0m
+  - name: "Facilitator unreachable"
+    uid: dfwbuuqktvvuoe
     severity: critical
+    for: 5m
+    condition: >
+      sum(up{app="sbc-x402-facilitator"}) or vector(0) < 1
+    summary: "Facilitator /metrics has been unreachable for 5 minutes"
+    action: "No payment can succeed while this is firing. `or vector(0)` is load bearing: if Alloy stops scraping the series disappears entirely, and without it the rule would go NoData and stay silent. Check: fly status -a sbc-x402-facilitator"
+
+  - name: "Settle faults on our side"
+    uid: cfwbuusjni8sge
+    severity: critical
+    for: 0s
+    condition: >
+      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown"}[15m])) > 1.5
     summary: "2+ facilitator-fault settle errors in 15 minutes"
-    action: "Check Loki: {app=\"sbc-x402-facilitator\"} | json | action=\"settle\" | errorCategory!=\"\""
+    action: "Counts only results the facilitator is responsible for. Client-caused rejections (bad_request, expired, invalid_signature, failed) are deliberately excluded \u2014 a public endpoint gets scanned and those must never page. Loki: {app=\"sbc-x402-facilitator\"} | json | line_format \"{{.message}}\" | json | action=\"settle\""
 
-  # The alert that would have caught the x402 v1 outage. Between 2026-02-20 and
-  # 2026-08-07 the facilitator rejected every spec-conformant v1 client with
-  # invalid_network, and nothing fired, because "no successful payments, ever" is
-  # invisible to a rule that only measures error ratios.
-  #
-  # Keyed on verify rather than settle: verify carries ~11x the volume, so it has
-  # enough traffic to measure. The `or vector(0)` is load-bearing — if no request
-  # has ever produced result="valid" that series does not exist, sum() over an
-  # empty vector returns empty rather than 0, `== 0` matches nothing, and the
-  # alert silently never fires. Which is exactly the outage it exists to detect.
-  - name: Traffic arriving but nothing succeeding
-    condition: >
-      (sum(increase(x402_verify_total[6h])) >= 5)
-      and
-      ((sum(increase(x402_verify_total{result="valid"}[6h])) or vector(0)) == 0)
-    for: 10m
+  - name: "Verify faults on our side"
+    uid: efwbuuth0nf28e
     severity: critical
-    summary: "Verify requests arriving for 6h with zero valid results"
-    action: "Payments are reaching us and none are succeeding. Check Loki for the dominant invalidReason: {app=\"sbc-x402-facilitator\"} | json | action=\"verify\""
+    for: 0s
+    condition: >
+      sum(increase(x402_verify_total{result=~"rpc_error|rpc_reverted|unknown"}[15m])) > 2.5
+    summary: "3+ facilitator-fault verify errors in 15 minutes"
+    action: "RPC or internal failures during verification. `invalid` is excluded \u2014 that is a client sending a bad signature."
 
-  # Client-fault volume is tracked, never paged. A spike here means an integrator
-  # shipped something broken, or a scanner found the endpoint — worth seeing on the
-  # dashboard, never worth waking anyone.
-  - name: Client error volume elevated (dashboard only)
+  - name: "Facilitator restart loop"
+    uid: dfwbuuzlt6bcwb
+    severity: warning
+    for: 5m
+    condition: >
+      changes(process_start_time_seconds{app="sbc-x402-facilitator"}[30m]) > 3
+    summary: "Facilitator restarted 4+ times in 30 minutes"
+    action: "Each restart clears the in-memory nonce tracker and settlement queue, so replay protection and per-wallet serialization reset. Threshold is 4+ because a deploy is itself a restart and two deploys in half an hour is routine \u2014 it fired on exactly that on 2026-08-26. A real crashloop on the 256MB VM produces far more. Check: fly logs -a sbc-x402-facilitator"
+
+  - name: "Nonce conflicts detected"
+    uid: ffwbuuvgo8k5cb
+    severity: warning
+    for: 0s
+    condition: >
+      sum(increase(x402_settle_total{result="nonce_conflict"}[15m])) > 0
+    summary: "Transaction nonce collision during settlement"
+    action: "The per-EOA settlement queue should make this impossible within one process. Any occurrence means either two facilitator instances share a wallet, or something is submitting outside the queue."
+
+  - name: "Settle latency p95 high"
+    uid: cfwbuuxr5dv5sc
+    severity: warning
+    for: 10m
+    condition: >
+      histogram_quantile(0.95, sum by (le) (rate(x402_settle_duration_seconds_bucket[30m]))) > 60
+    summary: "95th percentile settle latency above 60s"
+    action: "Settlements include waiting for on-chain confirmation, so this is slow-but-working vs hanging. Sustained high values usually mean a degraded RPC."
+
+  - name: "Client error volume elevated"
+    uid: ffwbuv2g9idxcd
+    severity: info
+    for: 0s
     condition: >
       sum(increase(x402_settle_total{result=~"bad_request|expired|invalid_signature|failed"}[1h])) > 20
-    for: 0m
-    severity: info
     summary: "High volume of client-side settle rejections in the last hour"
-    action: "Informational. Identify the payer: {app=\"sbc-x402-facilitator\"} | json | action=\"settle\" | line_format \"{{.payer}} {{.errorReason}}\""
+    action: "Informational. Means an integrator shipped something broken, or a scanner found the endpoint. Identify the payer before assuming a real client is affected."
 
-  - name: RPC errors spiking
-    condition: >
-      sum(increase(x402_settle_total{result="rpc_error"}[5m])) > 3
-    for: 0m
-    severity: critical
-    summary: "Multiple RPC connection failures in 5 minutes"
-    action: "Check RPC provider status for affected network"
-
-  - name: Nonce conflicts detected
-    condition: >
-      sum(increase(x402_settle_total{result="nonce_conflict"}[5m])) > 0
-    for: 0m
-    severity: warning
-    summary: "Transaction nonce conflicts — possible concurrent settle race"
-    action: "Check if multiple facilitator instances are using the same wallet"
-
-  # Client fault: downgraded from warning to info, and from "any occurrence" to a
-  # volume threshold. The facilitator proactively refuses permits with under 30s
-  # left to avoid burning gas, so a client with short deadlines produces a steady
-  # drip of these while the facilitator is working exactly as designed.
-  - name: Permit expired attempts (dashboard only)
+  - name: "Permit expired attempts (dashboard only)"
+    uid: dffk21bfg6ccgf
+    severity: info
+    for: 0s
     condition: >
       sum(increase(x402_settle_total{result="expired"}[1h])) > 10
-    for: 0m
-    severity: info
     summary: "Repeated expired-permit settle attempts in the last hour"
-    action: "Informational. Likely an SDK client using too-short permit durations"
+    action: "Client fault, downgraded from warning to info and from any-occurrence to a volume threshold. The facilitator proactively refuses permits with under 30s left to avoid burning gas, so a client using short deadlines produces a steady drip of these while the facilitator works exactly as designed."
 
-  # Client fault: downgraded from warning to info. This label is now where the
-  # malformed-signature guard routes junk, so any scanner hitting the public
-  # endpoint will trip a 5m/>3 threshold — the previous rule would have paged on
-  # the 2026-08-26 bot traffic by itself.
-  - name: Signature errors elevated (dashboard only)
-    condition: >
-      sum(increase(x402_settle_total{result="invalid_signature"}[1h])) > 20
-    for: 0m
+  - name: "Settlement succeeded"
+    uid: dfwbuv0l1qqyoc
     severity: info
-    summary: "High volume of invalid permit signatures in the last hour"
-    action: "Informational. Identify the payer before assuming a real integrator is broken"
-
-  - name: Health check down
-    type: loki
+    for: 0s
     condition: >
-      absent_over_time(
-        {app="sbc-x402-facilitator"} | json | msg="Facilitator started" [10m]
-      )
-    for: 5m
-    severity: critical
-    summary: "No facilitator logs received in 10 minutes"
-    action: "Check fly status -a sbc-x402-facilitator"
+      sum(increase(x402_settle_total{result="success"}[1h])) > 0
+    summary: "A payment settled successfully in the last hour"
+    action: "Informational, never a problem. Pre-PMF the useful event is a payment working. 224 mainnet transactions before 2026-08-26 left no record anyone could point at; this makes the next one visible."
