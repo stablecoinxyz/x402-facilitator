@@ -292,6 +292,24 @@ export async function settlePayment(req: Request, res: Response) {
       });
     }
 
+    // Reject a malformed signature before spending an RPC round trip on it.
+    // A 65-byte compact signature is "0x" + 130 hex chars. Anything shorter makes
+    // slice() return "" and parseInt() return NaN, which viem then throws on while
+    // ABI-encoding — surfacing as a generic gas_estimation_failed rather than the
+    // client error it actually is.
+    if (!isWellFormedSignature(signature)) {
+      log.warn({ payer: owner, network, errorReason: 'permit_signature_invalid' }, 'Malformed permit signature');
+      settleTotal.inc({ network, result: 'invalid_signature' });
+      recordDuration(startTime, network);
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'permit_signature_invalid',
+      });
+    }
+
     // Derive v, r, s from compact signature for on-chain permit()
     const r = `0x${signature.slice(2, 66)}` as `0x${string}`;
     const s = `0x${signature.slice(66, 130)}` as `0x${string}`;
@@ -618,6 +636,19 @@ export async function settlePayment(req: Request, res: Response) {
       errorReason,
     });
   }
+}
+
+/**
+ * A compact ECDSA signature is 65 bytes: r (32) + s (32) + v (1), hex-encoded
+ * with an 0x prefix, so exactly 132 characters.
+ *
+ * Validated up front because the downstream slice/parseInt produces NaN on a
+ * short input, and viem throws a RangeError while ABI-encoding it. That lands in
+ * the catch-all `failed` metric label instead of `invalid_signature`, which
+ * makes a client sending junk look like a facilitator fault.
+ */
+function isWellFormedSignature(signature: unknown): signature is string {
+  return typeof signature === 'string' && /^0x[0-9a-fA-F]{130}$/.test(signature);
 }
 
 function recordDuration(startTime: bigint, network: string) {
