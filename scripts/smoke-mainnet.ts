@@ -17,6 +17,7 @@
  *   --amount <dec>    human amount, default 0.01
  *   --facilitator <u> default https://x402.stablecoin.xyz
  *   --asset sbc|usdc  default sbc
+ *   --rpc <url>       override the Base RPC endpoint (else $BASE_RPC_URL, else public)
  *   --yes             skip the confirmation prompt
  *
  * Exits non-zero on any failure so it can gate a deploy.
@@ -71,8 +72,16 @@ async function main() {
 
   const payer = privateKeyToAccount(pk as `0x${string}`);
   const chain = getViemChain(network);
-  const pub = createPublicClient({ chain, transport: http(network.rpcUrl) });
-  const wallet = createWalletClient({ account: payer, chain, transport: http(network.rpcUrl) });
+  // --rpc override: public Base endpoints are not uniformly reliable. During
+  // development base-rpc.publicnode.com returned MISSING for USDC's
+  // DOMAIN_SEPARATOR/version/nonces (wrong answers, not errors) and later 403'd
+  // archive reads. Prefer a private endpoint for anything load bearing.
+  const rpcUrl = arg('--rpc', process.env.BASE_RPC_URL || network.rpcUrl) as string;
+  // Host only — a private endpoint carries its API key in the path or query.
+  const rpcHost = (() => { try { return new URL(rpcUrl).host; } catch { return 'invalid-url'; } })();
+  console.log(`  rpc         : ${rpcHost}`);
+  const pub = createPublicClient({ chain, transport: http(rpcUrl) });
+  const wallet = createWalletClient({ account: payer, chain, transport: http(rpcUrl) });
 
   const value = parseUnits(humanAmount, asset.decimals);
   if (value <= 0n) die('--amount must be greater than zero');
@@ -180,10 +189,52 @@ async function main() {
   console.log(`  gasUsed : ${receipt.gasUsed}`);
   if (receipt.status !== 'success') die('transaction reverted on chain');
 
-  const merchantBal1 = await pub.readContract({ address: asset.address, abi: ERC20, functionName: 'balanceOf', args: [payTo as `0x${string}`] });
-  const delta = merchantBal1 - merchantBal0;
-  console.log(`  merchant delta : +${formatUnits(delta, asset.decimals)} ${onchainName}`);
-  if (delta !== value) die(`merchant balance moved by ${formatUnits(delta, asset.decimals)}, expected ${humanAmount}`);
+  // Primary proof: the ERC-20 Transfer event in this receipt. Authoritative and
+  // immune to RPC lag, because it is carried by the receipt we already hold.
+  //
+  // A balance re-read is NOT sufficient on its own: public Base RPCs are load
+  // balanced across nodes, and a read issued immediately after the receipt can
+  // land on one that has not yet indexed the block. That produced a false
+  // failure on the first real run (2026-08-26) — the payment had settled
+  // correctly and the delta still read zero.
+  const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+  const topicAddr = (t: string) => `0x${t.slice(26)}`.toLowerCase();
+  const transfers = receipt.logs
+    .filter(l => l.address.toLowerCase() === asset.address.toLowerCase() && l.topics[0] === TRANSFER_TOPIC && l.topics.length >= 3)
+    .map(l => ({ from: topicAddr(l.topics[1]!), to: topicAddr(l.topics[2]!), value: BigInt(l.data) }));
+
+  const match = transfers.find(t =>
+    t.from === payer.address.toLowerCase() &&
+    t.to === payTo.toLowerCase() &&
+    t.value === value);
+
+  console.log(`  Transfer events in receipt: ${transfers.length}`);
+  for (const t of transfers) console.log(`    ${t.from} -> ${t.to}  ${formatUnits(t.value, asset.decimals)}`);
+  if (!match) die(`no Transfer event of ${humanAmount} from ${payer.address} to ${payTo} in the receipt`);
+  console.log('  ✓ Transfer event matches payer, merchant and amount');
+
+  // Corroboration only — the Transfer event above is the proof. This block can
+  // never fail the run: public RPCs rate limit (429) and lag behind the block
+  // they just gave us a receipt for, and neither means the payment failed.
+  let confirmed = false;
+  for (let attempt = 1; attempt <= 8 && !confirmed; attempt++) {
+    try {
+      const merchantBal1 = await pub.readContract({
+        address: asset.address, abi: ERC20, functionName: 'balanceOf',
+        args: [payTo as `0x${string}`], blockNumber: receipt.blockNumber,
+      });
+      const delta = merchantBal1 - merchantBal0;
+      if (delta === value) {
+        console.log(`  ✓ merchant balance delta +${formatUnits(delta, asset.decimals)} ${onchainName}`);
+        confirmed = true;
+      } else if (attempt === 8) {
+        console.log(`  ~ balance read shows ${formatUnits(delta, asset.decimals)} after ${attempt} tries (RPC lag) — Transfer event already proved the payment`);
+      }
+    } catch (e: any) {
+      if (attempt === 8) console.log(`  ~ balance read unavailable (${e?.shortMessage ?? e?.message}) — Transfer event already proved the payment`);
+    }
+    if (!confirmed) await new Promise(r => setTimeout(r, 2500));
+  }
 
   // ---- Idempotency -----------------------------------------------------------
   console.log('\n[6/6] Replay is idempotent');
