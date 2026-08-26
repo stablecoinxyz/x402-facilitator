@@ -19,6 +19,13 @@
  *   --asset sbc|usdc  default sbc
  *   --rpc <url>       override the Base RPC endpoint (else $BASE_RPC_URL, else public)
  *   --yes             skip the confirmation prompt
+ *   --no-recover      leave the funds at the merchant instead of returning them
+ *
+ * RECOVERY. Set MERCHANT_PRIVATE_KEY and the test returns the tokens to the
+ * payer when it finishes, so a run costs only gas. Without that key the funds
+ * stay at the merchant and the script says so loudly — a smoke test that
+ * strands value is not self-cleaning, and this one stranded 0.03 SBC + 0.01
+ * USDC across its first four runs before this was added.
  *
  * Exits non-zero on any failure so it can gate a deploy.
  */
@@ -96,7 +103,7 @@ async function main() {
   console.log(`  amount      : ${humanAmount} (${value} units, ${asset.decimals} decimals)`);
 
   // ---- Preflight: fail before signing anything -------------------------------
-  console.log('\n[1/6] Preflight');
+  console.log('\n[1/7] Preflight');
 
   const sup = await fetch(`${facilitatorUrl}/supported`).then(r => r.json()).catch(() => die('facilitator /supported unreachable'));
   const kinds: any[] = sup?.kinds ?? [];
@@ -124,10 +131,15 @@ async function main() {
   if (facGas === 0n) die('facilitator has zero ETH on Base — it cannot pay gas for the settlement');
   if (onchainName !== asset.extra.name) die(`token name() is ${JSON.stringify(onchainName)} but facilitator advertises ${JSON.stringify(asset.extra.name)} — EIP-712 domain will not match`);
 
+  if (!process.env.MERCHANT_PRIVATE_KEY && !has('--no-recover')) {
+    console.log(`\n  ! MERCHANT_PRIVATE_KEY is not set, so this run cannot return the funds.`);
+    console.log(`  ! ${humanAmount} ${asset.extra.name} will be left at ${payTo}.`);
+  }
+
   if (!has('--yes') && !(await confirm('\nType "yes" to send a REAL mainnet payment: '))) die('aborted by operator');
 
   // ---- Sign the permit -------------------------------------------------------
-  console.log('\n[2/6] Signing ERC-2612 permit');
+  console.log('\n[2/7] Signing ERC-2612 permit');
   const permitNonce = await pub.readContract({ address: asset.address, abi: ERC20, functionName: 'nonces', args: [payer.address] });
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 600); // 10 min — well clear of the 30s safety margin
 
@@ -166,13 +178,13 @@ async function main() {
   };
 
   // ---- Verify ----------------------------------------------------------------
-  console.log('\n[3/6] POST /verify');
+  console.log('\n[3/7] POST /verify');
   const v = await post('/verify');
   console.log(`  ${v.status} ${JSON.stringify(v.body)}`);
   if (!v.body?.isValid) die(`verify rejected the payment: ${v.body?.invalidReason}`);
 
   // ---- Settle ----------------------------------------------------------------
-  console.log('\n[4/6] POST /settle  (real on-chain transfer)');
+  console.log('\n[4/7] POST /settle  (real on-chain transfer)');
   const s = await post('/settle');
   console.log(`  ${s.status} ${JSON.stringify(s.body)}`);
   if (!s.body?.success) die(`settle failed: ${s.body?.errorReason}`);
@@ -181,7 +193,7 @@ async function main() {
 
   // ---- Independent on-chain verification -------------------------------------
   // Everything below reads chain directly. The facilitator's response is not trusted.
-  console.log('\n[5/6] Independent on-chain verification');
+  console.log('\n[5/7] Independent on-chain verification');
   const receipt = await pub.waitForTransactionReceipt({ hash: txHash, confirmations: 1 });
   console.log(`  tx      : ${txHash}`);
   console.log(`  block   : ${receipt.blockNumber}`);
@@ -237,11 +249,51 @@ async function main() {
   }
 
   // ---- Idempotency -----------------------------------------------------------
-  console.log('\n[6/6] Replay is idempotent');
+  console.log('\n[6/7] Replay is idempotent');
   const replay = await post('/settle');
   console.log(`  ${replay.status} ${JSON.stringify(replay.body)}`);
   if (!replay.body?.success) die(`replay returned failure instead of the original settlement: ${replay.body?.errorReason}`);
   if (replay.body.transaction !== txHash) die(`replay returned a different tx (${replay.body.transaction}) — the permit may have been settled twice`);
+
+  // ---- Recovery: return the funds to origin ----------------------------------
+  // A smoke test should leave no residue. Without this the merchant accumulates
+  // value it cannot move, because it holds no gas of its own.
+  console.log('\n[7/7] Returning funds to payer');
+  const merchantPk = process.env.MERCHANT_PRIVATE_KEY;
+  if (has('--no-recover')) {
+    console.log(`  skipped (--no-recover). ${humanAmount} ${onchainName} remains at ${payTo}`);
+  } else if (!merchantPk || !/^0x[0-9a-fA-F]{64}$/.test(merchantPk)) {
+    console.log(`  ! MERCHANT_PRIVATE_KEY not set — ${humanAmount} ${onchainName} stays at ${payTo}`);
+    console.log('  ! set it to make this run self-cleaning');
+  } else {
+    const merchant = privateKeyToAccount(merchantPk as `0x${string}`);
+    if (merchant.address.toLowerCase() !== payTo.toLowerCase()) {
+      die(`MERCHANT_PRIVATE_KEY is ${merchant.address}, which is not --pay-to ${payTo}`);
+    }
+    const merchantWallet = createWalletClient({ account: merchant, chain, transport: http(rpcUrl) });
+
+    // The merchant needs its own gas. Top up from the payer only when short.
+    const GAS_FLOAT = parseUnits('0.00002', 18);
+    const merchantGas = await pub.getBalance({ address: merchant.address });
+    if (merchantGas < GAS_FLOAT) {
+      const topUp = GAS_FLOAT - merchantGas;
+      console.log(`  merchant gas ${formatUnits(merchantGas, 18)} ETH — topping up ${formatUnits(topUp, 18)}`);
+      const fundHash = await wallet.sendTransaction({ to: merchant.address, value: topUp });
+      await pub.waitForTransactionReceipt({ hash: fundHash, confirmations: 1 });
+      console.log(`  gas top-up tx ${fundHash}`);
+    }
+
+    const returnHash = await merchantWallet.writeContract({
+      address: asset.address,
+      abi: [{ name: 'transfer', inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ type: 'bool' }], stateMutability: 'nonpayable', type: 'function' }],
+      functionName: 'transfer',
+      args: [payer.address, value],
+    });
+    const rr = await pub.waitForTransactionReceipt({ hash: returnHash, confirmations: 1 });
+    if (rr.status !== 'success') die(`return transfer reverted: ${returnHash}`);
+    console.log(`  returned ${humanAmount} ${onchainName} to ${payer.address}`);
+    console.log(`  return tx ${returnHash}`);
+  }
 
   console.log('\n' + '='.repeat(60));
   console.log('PASS — real mainnet settlement completed and verified on chain');
