@@ -86,3 +86,39 @@ describe('POST /settle - malformed signature guard', () => {
     }
   });
 });
+
+describe('gas-estimation errors are categorized, not dumped into `failed`', () => {
+  // Estimation simulates permit(). A revert there is the client's permit being
+  // bad, not a facilitator fault — but it returned early under the catch-all
+  // `failed` label, feeding the settle alert.
+  //
+  // Verified against production 2026-08-26: a well-formed but cryptographically
+  // invalid signature returned
+  //   gas_estimation_failed: ... reverted ... ECDSA: invalid signature
+  const { categorizeSettleError } = require('../routes/settle') as any;
+
+  it('classifies a viem ECDSA revert as invalid_signature, not tx_reverted', () => {
+    // Real production message shape — contains BOTH "reverted" and "ECDSA",
+    // so branch order decides the label.
+    const err = {
+      message: 'The contract function "permit" reverted with the following reason:\nECDSA: invalid signature',
+      shortMessage: 'The contract function "permit" reverted.',
+    };
+    expect(categorizeSettleError(err).errorCategory).toBe('invalid_signature');
+    expect(categorizeSettleError(err).errorReason).toBe('permit_signature_invalid');
+  });
+
+  it('still classifies a plain revert as tx_reverted', () => {
+    const err = { message: 'execution reverted: ERC20: transfer amount exceeds balance', shortMessage: '' };
+    expect(categorizeSettleError(err).errorCategory).toBe('tx_reverted');
+  });
+
+  it('classifies RPC failures as rpc_error (facilitator fault)', () => {
+    expect(categorizeSettleError({ message: 'fetch failed' }).errorCategory).toBe('rpc_error');
+    expect(categorizeSettleError({ message: 'connect ETIMEDOUT' }).errorCategory).toBe('rpc_error');
+  });
+
+  it('falls back to unknown for an unrecognized message', () => {
+    expect(categorizeSettleError({ message: 'something nobody has seen' }).errorCategory).toBe('unknown');
+  });
+});

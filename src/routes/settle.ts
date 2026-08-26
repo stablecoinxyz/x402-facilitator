@@ -453,14 +453,20 @@ export async function settlePayment(req: Request, res: Response) {
           });
           log.debug('Gas estimation passed');
         } catch (gasError: any) {
-          log.warn({ err: gasError, payer: owner, network }, 'Gas estimation failed');
-          settleTotal.inc({ network, result: 'failed' });
+          // Estimation simulates permit(); a revert here is normally the client's
+          // permit being invalid, so classify it instead of dumping everything
+          // into the catch-all `failed` label the settle alert watches.
+          const gasErr = categorizeSettleError(gasError);
+          const classified = gasErr.errorCategory !== 'unknown';
+          log.warn({ err: gasError, payer: owner, network, errorCategory: gasErr.errorCategory }, 'Gas estimation failed');
+          settleTotal.inc({ network, result: classified ? gasErr.errorCategory : 'failed' });
+          recordDuration(startTime, network);
           return res.json({
             success: false,
             payer: owner,
             transaction: '',
             network,
-            errorReason: `gas_estimation_failed: ${gasError.message}`,
+            errorReason: classified ? gasErr.errorReason : `gas_estimation_failed: ${gasError.message}`,
           });
         }
       } else {
@@ -590,36 +596,7 @@ export async function settlePayment(req: Request, res: Response) {
     } catch {}
 
     // Categorize the error for precise metrics
-    const msg = error?.message || '';
-    const shortMsg = error?.shortMessage || '';
-    let errorCategory: string;
-    let errorReason: string;
-
-    if (msg.includes('insufficient allowance') || shortMsg.includes('insufficient allowance')) {
-      errorCategory = 'insufficient_allowance';
-      errorReason = 'permit_not_effective';
-    } else if (msg.includes('nonce too low') || msg.includes('replacement transaction underpriced') || msg.includes('already known')) {
-      errorCategory = 'nonce_conflict';
-      errorReason = 'tx_nonce_conflict';
-    } else if (msg.includes('insufficient funds') || msg.includes('gas price too low') || msg.includes('intrinsic gas too low')) {
-      errorCategory = 'gas_error';
-      errorReason = 'insufficient_gas';
-    } else if (msg.includes('ECDSA') || msg.includes('invalid signature') || msg.includes('Invalid signer')) {
-      errorCategory = 'invalid_signature';
-      errorReason = 'permit_signature_invalid';
-    } else if (msg.includes('execution reverted') || msg.includes('revert')) {
-      errorCategory = 'tx_reverted';
-      errorReason = `tx_reverted: ${shortMsg || msg.slice(0, 200)}`;
-    } else if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
-      errorCategory = 'rpc_error';
-      errorReason = 'rpc_connection_error';
-    } else if (msg.includes('TransactionReceiptNotFoundError') || msg.includes('could not be found')) {
-      errorCategory = 'receipt_timeout';
-      errorReason = 'tx_receipt_not_found';
-    } else {
-      errorCategory = 'unknown';
-      errorReason = msg.slice(0, 300);
-    }
+    const { errorCategory, errorReason } = categorizeSettleError(error);
 
     // Include partial tx hash if permit succeeded but transferFrom failed
     const partialTxHash = error?.permitHash || '';
@@ -649,6 +626,46 @@ export async function settlePayment(req: Request, res: Response) {
  */
 function isWellFormedSignature(signature: unknown): signature is string {
   return typeof signature === 'string' && /^0x[0-9a-fA-F]{130}$/.test(signature);
+}
+
+/**
+ * Map a thrown settlement error to a metric label + client-facing reason.
+ *
+ * Shared by the catch-all handler and the gas-estimation dry run. Estimation
+ * simulates permit(), so a revert there is normally the client's permit being
+ * bad — a wrong signature, a consumed nonce — not a facilitator fault. It used
+ * to return early under the catch-all `failed` label, which put client errors in
+ * the bucket the settle alert watches.
+ *
+ * Order matters: the ECDSA branch must precede the generic revert branch,
+ * because viem's message for a bad signature contains both.
+ */
+export function categorizeSettleError(error: any): { errorCategory: string; errorReason: string } {
+  const msg = error?.message || '';
+  const shortMsg = error?.shortMessage || '';
+
+  if (msg.includes('insufficient allowance') || shortMsg.includes('insufficient allowance')) {
+    return { errorCategory: 'insufficient_allowance', errorReason: 'permit_not_effective' };
+  }
+  if (msg.includes('nonce too low') || msg.includes('replacement transaction underpriced') || msg.includes('already known')) {
+    return { errorCategory: 'nonce_conflict', errorReason: 'tx_nonce_conflict' };
+  }
+  if (msg.includes('insufficient funds') || msg.includes('gas price too low') || msg.includes('intrinsic gas too low')) {
+    return { errorCategory: 'gas_error', errorReason: 'insufficient_gas' };
+  }
+  if (msg.includes('ECDSA') || msg.includes('invalid signature') || msg.includes('Invalid signer')) {
+    return { errorCategory: 'invalid_signature', errorReason: 'permit_signature_invalid' };
+  }
+  if (msg.includes('execution reverted') || msg.includes('revert')) {
+    return { errorCategory: 'tx_reverted', errorReason: `tx_reverted: ${shortMsg || msg.slice(0, 200)}` };
+  }
+  if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
+    return { errorCategory: 'rpc_error', errorReason: 'rpc_connection_error' };
+  }
+  if (msg.includes('TransactionReceiptNotFoundError') || msg.includes('could not be found')) {
+    return { errorCategory: 'receipt_timeout', errorReason: 'tx_receipt_not_found' };
+  }
+  return { errorCategory: 'unknown', errorReason: msg.slice(0, 300) };
 }
 
 function recordDuration(startTime: bigint, network: string) {
