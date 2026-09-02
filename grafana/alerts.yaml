@@ -18,7 +18,10 @@
 #   CLIENT FAULT  bad_request, expired, invalid_signature, failed
 #                 Facilitator worked and rejected bad input. Never pages.
 #   OUR FAULT     rpc_error, receipt_timeout, nonce_conflict, gas_error,
-#                 insufficient_allowance, tx_reverted, unknown
+#                 insufficient_allowance, tx_reverted, unknown,
+#                 settlement_disabled (neither ENABLE_REAL_SETTLEMENT nor
+#                 ALLOW_SIMULATED_SETTLEMENT is set: a misconfigured deploy
+#                 refusing every settle, which must page)
 #
 # History: the previous "Settle failure rate high" was a ratio with no
 # minimum-volume floor that counted client errors as facilitator failures.
@@ -42,7 +45,7 @@ rules:
     severity: critical
     for: 0s
     condition: >
-      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown"}[15m])) > 1.5
+      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown|settlement_disabled"}[15m])) > 1.5
     summary: "2+ facilitator-fault settle errors in 15 minutes"
     action: "Counts only results the facilitator is responsible for. Client-caused rejections (bad_request, expired, invalid_signature, failed) are deliberately excluded \u2014 a public endpoint gets scanned and those must never page. Loki: {app=\"sbc-x402-facilitator\"} | json | line_format \"{{.message}}\" | json | action=\"settle\""
 

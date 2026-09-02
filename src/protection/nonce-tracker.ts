@@ -15,6 +15,8 @@ export interface SettledRecord {
   txHash: string;
   payer: string;
   network: string;
+  /** Set when the settlement was simulated (no on-chain transaction). */
+  simulated?: boolean;
 }
 
 export class NonceTracker {
