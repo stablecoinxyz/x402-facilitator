@@ -3,6 +3,8 @@ import { createPublicClient, http, verifyTypedData } from 'viem';
 import type { Logger } from 'pino';
 import { config, resolveToken, toCaip2Network } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
+import { verifyCasperPayment } from '../casper/verify';
+import { isCasperNetwork } from '../casper/networks';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
 
@@ -240,6 +242,28 @@ export async function verifyPayment(req: Request, res: Response) {
           isValid: false,
           payer,
           invalidReason: 'invalid_solana_signature',
+        });
+      }
+    }
+
+    // Route by network — Casper uses CAIP-2 "casper:..." prefix
+    if (isCasperNetwork(network)) {
+      log.debug({ network }, 'Casper payment detected');
+      try {
+        const result = await verifyCasperPayment(paymentPayload.payload, paymentRequirements, network, log);
+        verifyTotal.inc({ network, result: result.isValid ? 'valid' : 'invalid' });
+        recordDuration(startTime, network);
+        log.info({ action: 'verify', network, success: result.isValid, payer: result.payer }, 'Verify complete');
+        return res.json(result);
+      } catch (casperErr: any) {
+        const payer = paymentPayload.payload?.from || 'unknown';
+        log.warn({ err: casperErr, network, payer }, 'Casper verification error');
+        verifyTotal.inc({ network, result: 'invalid' });
+        recordDuration(startTime, network);
+        return res.json({
+          isValid: false,
+          payer,
+          invalidReason: 'invalid_casper_signature',
         });
       }
     }

@@ -4,6 +4,8 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
 import { config, resolveToken, toCaip2Network } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
+import { settleCasperPayment } from '../casper/settle';
+import { isCasperNetwork } from '../casper/networks';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
@@ -217,6 +219,17 @@ export async function settlePayment(req: Request, res: Response) {
     if (network?.startsWith('solana:')) {
       log.debug({ network }, 'Solana settlement (delegated transfer)');
       const result = await settleSolanaPayment(paymentPayload.payload, log);
+      const resultLabel = result.success ? 'success' : 'failed';
+      settleTotal.inc({ network, result: resultLabel });
+      recordDuration(startTime, network);
+      log.info({ action: 'settle', network, success: result.success, payer: result.payer, txHash: result.transaction }, 'Settle complete');
+      return res.json(result);
+    }
+
+    // Route by network — Casper uses CAIP-2 "casper:..." prefix
+    if (isCasperNetwork(network)) {
+      log.debug({ network }, 'Casper settlement (wCSPR CEP-18 transfer)');
+      const result = await settleCasperPayment(paymentPayload.payload, paymentRequirements, network, log);
       const resultLabel = result.success ? 'success' : 'failed';
       settleTotal.inc({ network, result: resultLabel });
       recordDuration(startTime, network);
