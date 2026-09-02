@@ -85,6 +85,16 @@ All config via `.env` — see `.env.example`. Each network is independent: only 
 
 The server auto-selects the next available port if `FACILITATOR_PORT` (default 3001) is in use.
 
+### Settlement modes
+
+| `ENABLE_REAL_SETTLEMENT` | `ALLOW_SIMULATED_SETTLEMENT` | `/settle` behavior |
+|---|---|---|
+| `true` | any | Real on-chain settlement (production) |
+| not `true` | `true` | Simulated: no on-chain call, fabricated hash, response carries header `X-Settlement-Mode: simulated` (local development only) |
+| not `true` | not `true` | Refuses: `success: false`, `errorReason: "settlement_disabled"` |
+
+Simulation is opt-in. A deployment with neither flag set refuses to settle rather than reporting a settlement that never happened.
+
 ## Demo
 
 Interactive demo using SBC tokens. Generates wallets, checks balances, approves the facilitator, then sends a v2 verify + settle request.

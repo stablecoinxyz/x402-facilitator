@@ -1,4 +1,6 @@
 process.env.ENABLE_REAL_SETTLEMENT = 'false';
+// Simulation is opt-in; the suites exercise the simulated path.
+process.env.ALLOW_SIMULATED_SETTLEMENT = 'true';
 
 // Dummy facilitator keys for CI — settle code checks these before reaching
 // the simulated settlement path. The viem mock handles all actual crypto ops.

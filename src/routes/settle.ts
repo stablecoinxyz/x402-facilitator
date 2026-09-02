@@ -284,6 +284,7 @@ export async function settlePayment(req: Request, res: Response) {
     if (previousSettlement) {
       log.info({ payer: owner, network, nonce, txHash: previousSettlement.txHash }, 'Idempotent replay — returning original settlement');
       settleTotal.inc({ network, result: 'replay' });
+      if (previousSettlement.simulated) res.set('X-Settlement-Mode', 'simulated');
       return res.json({
         success: true,
         payer: previousSettlement.payer,
@@ -391,10 +392,30 @@ export async function settlePayment(req: Request, res: Response) {
 
     log.debug({ label: networkConfig.label }, 'Executing transfer');
 
-    // Check if we should use real or simulated settlement
+    // Settlement mode. Real settlement is enabled with ENABLE_REAL_SETTLEMENT=true.
+    // Simulation (no on-chain call, fabricated hash) is a local-development aid and
+    // must be opted into with ALLOW_SIMULATED_SETTLEMENT=true. With neither set the
+    // route refuses, instead of reporting a settlement that never happened. It used
+    // to fall through to simulation by default, so a fresh deploy answered every
+    // settle with success:true and a random hash (issue #2).
     const useRealSettlement = process.env.ENABLE_REAL_SETTLEMENT === 'true';
+    const allowSimulated = process.env.ALLOW_SIMULATED_SETTLEMENT === 'true';
+
+    if (!useRealSettlement && !allowSimulated) {
+      log.error({ payer: owner, network, errorReason: 'settlement_disabled' }, 'Settlement refused: ENABLE_REAL_SETTLEMENT is not "true" and ALLOW_SIMULATED_SETTLEMENT is not set');
+      settleTotal.inc({ network, result: 'settlement_disabled' });
+      recordDuration(startTime, network);
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'settlement_disabled',
+      });
+    }
 
     let txHash: string;
+    let simulated = false;
 
     if (useRealSettlement) {
       log.info({ payer: owner, network, mode: 'real', queueDepth: settlementQueue.pending(account.address) }, 'Real settlement: ERC-2612 Permit + TransferFrom');
@@ -566,18 +587,24 @@ export async function settlePayment(req: Request, res: Response) {
         action: 'settle', network, payer: owner, txHash, blockNumber: onChainResult.blockNumber.toString(), gasUsed: onChainResult.gasUsed.toString(), success: true,
       }, 'Settlement complete');
     } else {
-      log.info({ payer: owner, network, mode: 'simulated' }, 'Simulated settlement');
+      simulated = true;
+      log.warn({ payer: owner, network, mode: 'simulated' }, 'Simulated settlement: no on-chain transaction (ALLOW_SIMULATED_SETTLEMENT is set)');
 
-      // Simulate a transaction hash
+      // Fabricated transaction hash. Nothing was sent to any chain.
       txHash = `0x${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
 
       log.info({ action: 'settle', network, payer: owner, txHash, success: true, mode: 'simulated' }, 'Simulated settlement complete');
     }
 
     // Mark nonce as settled with tx hash for idempotent replay
-    nonceTracker.markSettled(network, owner, nonce, { txHash, payer: owner, network });
+    nonceTracker.markSettled(network, owner, nonce, { txHash, payer: owner, network, ...(simulated ? { simulated: true } : {}) });
     settleTotal.inc({ network, result: 'success' });
     recordDuration(startTime, network);
+
+    // Simulated settlements are marked out of band, so the fabricated hash can
+    // never pass for a real one to anyone reading the response. The body keeps
+    // exactly the SettleResponse fields the spec defines.
+    if (simulated) res.set('X-Settlement-Mode', 'simulated');
 
     res.json({
       success: true,
