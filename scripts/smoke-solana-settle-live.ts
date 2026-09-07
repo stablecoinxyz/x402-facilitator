@@ -63,12 +63,27 @@ async function confirm(question: string): Promise<boolean> {
   return answer.trim().toLowerCase() === 'yes';
 }
 
+/** Seconds to wait for the facilitator before giving up. */
+const REQUEST_TIMEOUT_S = 45;
+
 async function post(target: string, path: string, body: unknown) {
-  const res = await fetch(`${target}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  // Without a deadline a facilitator stuck on a rate-limited RPC hangs this
+  // script indefinitely, which makes it useless as a gate: it never reports.
+  let res: Response;
+  try {
+    res = await fetch(`${target}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_S * 1000),
+    });
+  } catch (e: any) {
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      die(`${path} did not answer within ${REQUEST_TIMEOUT_S}s. The facilitator is most likely stuck on ` +
+          'its Solana RPC. Check SOLANA_RPC_URL on the server, and its log.');
+    }
+    die(`${path} request failed: ${e?.message ?? e}`);
+  }
   const text = await res.text();
   let json: any;
   try { json = JSON.parse(text); } catch { json = { _unparsed: text.slice(0, 400) }; }
