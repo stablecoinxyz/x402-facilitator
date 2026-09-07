@@ -7,7 +7,7 @@
  *
  * Stores the tx hash so retries return the original success response (idempotent).
  *
- * Key: network + lowercase(owner) + nonce
+ * Key: network + owner + nonce (owner lowercased only for case-insensitive hex addresses)
  * Bounded LRU eviction to prevent unbounded memory growth.
  */
 
@@ -31,7 +31,10 @@ export class NonceTracker {
   }
 
   private key(network: string, owner: string, nonce: string): string {
-    return `${network}:${owner.toLowerCase()}:${nonce}`;
+    // EVM addresses are case-insensitive hex. Solana addresses are case-SENSITIVE
+    // base58, so lowercasing one would collapse distinct accounts onto a single key.
+    const normalizedOwner = owner.startsWith('0x') ? owner.toLowerCase() : owner;
+    return `${network}:${normalizedOwner}:${nonce}`;
   }
 
   hasSettled(network: string, owner: string, nonce: string): boolean {

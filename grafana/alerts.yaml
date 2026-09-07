@@ -45,7 +45,7 @@ rules:
     severity: critical
     for: 0s
     condition: >
-      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown|settlement_disabled"}[15m])) > 1.5
+      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|settlement_pending|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown|settlement_disabled"}[15m])) > 1.5
     summary: "2+ facilitator-fault settle errors in 15 minutes"
     action: "Counts only results the facilitator is responsible for. Client-caused rejections (bad_request, expired, invalid_signature, failed) are deliberately excluded \u2014 a public endpoint gets scanned and those must never page. Loki: {app=\"sbc-x402-facilitator\"} | json | line_format \"{{.message}}\" | json | action=\"settle\""
 

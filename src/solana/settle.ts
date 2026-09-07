@@ -12,7 +12,6 @@ import {
   Keypair,
   PublicKey,
   Transaction,
-  sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddress,
@@ -90,19 +89,49 @@ export async function settleSolanaPayment(
     const transaction = new Transaction().add(transferInstruction);
 
     // Get recent blockhash
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = facilitatorKeypair.publicKey;
 
     log.debug('Sending delegated transfer transaction');
 
-    // Sign and send transaction (facilitator signs as delegate)
-    const signature = await sendAndConfirmTransaction(
-      connection,
-      transaction,
-      [facilitatorKeypair],
-      { commitment: 'confirmed' }
-    );
+    // Send and confirm as two steps, not sendAndConfirmTransaction. Once the
+    // transfer is broadcast the tokens may already have moved, so the signature has
+    // to reach the caller whatever the confirmation does — a "failed" answer with no
+    // signature reads as did-not-happen and invites a second payment.
+    transaction.sign(facilitatorKeypair);
+    const signature = await connection.sendRawTransaction(transaction.serialize());
+
+    log.debug({ txHash: signature }, 'Delegated transfer broadcast, awaiting confirmation');
+
+    let confirmation;
+    try {
+      confirmation = await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+    } catch (confirmError: any) {
+      // Broadcast, outcome unknown. Non-terminal, and it carries the signature.
+      log.error({ err: confirmError, txHash: signature, payer: from }, 'Delegated transfer broadcast but unconfirmed');
+      return {
+        success: false,
+        payer: from,
+        transaction: signature,
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        errorReason: 'settlement_pending',
+      };
+    }
+
+    if (confirmation.value.err) {
+      log.error({ err: confirmation.value.err, txHash: signature, payer: from }, 'Delegated transfer failed on chain');
+      return {
+        success: false,
+        payer: from,
+        transaction: signature,
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        errorReason: 'invalid_transaction_state',
+      };
+    }
 
     log.info({ txHash: signature, payer: from, to }, 'Delegated settlement complete');
 
@@ -113,13 +142,15 @@ export async function settleSolanaPayment(
       network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
     };
   } catch (error: any) {
+    // The full error goes to the log, never to the response: RPC client errors embed
+    // the endpoint URL, which carries an API key on most providers.
     log.error({ err: error, payer: paymentPayload.from }, 'Solana settlement error');
     return {
       success: false,
       payer: paymentPayload.from || 'unknown',
       transaction: '',
       network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-      errorReason: error.message,
+      errorReason: 'unexpected_settle_error',
     };
   }
 }
