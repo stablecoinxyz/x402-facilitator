@@ -21,7 +21,12 @@
 #                 insufficient_allowance, tx_reverted, unknown,
 #                 settlement_disabled (neither ENABLE_REAL_SETTLEMENT nor
 #                 ALLOW_SIMULATED_SETTLEMENT is set: a misconfigured deploy
-#                 refusing every settle, which must page)
+#                 refusing every settle, which must page),
+#                 settlement_pending (the transfer was broadcast and its
+#                 receipt could not be read: the money may have moved and a
+#                 human must reconcile the hash on chain, so it pages. Before
+#                 this label existed these landed in `unknown`, so leaving it
+#                 out of the rule would REMOVE paging that exists today)
 #
 # History: the previous "Settle failure rate high" was a ratio with no
 # minimum-volume floor that counted client errors as facilitator failures.
@@ -45,7 +50,7 @@ rules:
     severity: critical
     for: 0s
     condition: >
-      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown|settlement_disabled"}[15m])) > 1.5
+      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|settlement_pending|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown|settlement_disabled"}[15m])) > 1.5
     summary: "2+ facilitator-fault settle errors in 15 minutes"
     action: "Counts only results the facilitator is responsible for. Client-caused rejections (bad_request, expired, invalid_signature, failed) are deliberately excluded \u2014 a public endpoint gets scanned and those must never page. Loki: {app=\"sbc-x402-facilitator\"} | json | line_format \"{{.message}}\" | json | action=\"settle\""
 

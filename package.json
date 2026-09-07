@@ -30,7 +30,9 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage --silent",
-    "conformance": "tsx src/__tests__/conformance.ts"
+    "conformance": "tsx src/__tests__/conformance.ts",
+    "smoke:solana": "tsx scripts/smoke-solana-mainnet.ts",
+    "smoke:solana:live": "tsx scripts/smoke-solana-settle-live.ts"
   },
   "dependencies": {
     "@solana/spl-token": "0.4.14",

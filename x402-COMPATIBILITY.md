@@ -103,6 +103,8 @@ All `invalidReason` / `errorReason` values follow the x402 v2 spec naming conven
 | `invalid_exact_evm_payload_authorization_value_mismatch` | Amount less than required |
 | `invalid_exact_evm_payload_recipient_mismatch` | Spender or recipient doesn't match |
 | `insufficient_funds` | On-chain token balance too low |
+| `settlement_pending` | Transfer broadcast, confirmation unreadable. **Non-terminal** — the caller reconciles on chain rather than re-signing. Always carries the broadcast hash in `transaction`, as the spec requires |
+| `invalid_transaction_state` | Transaction mined and reverted. Carries the hash |
 
 ---
 

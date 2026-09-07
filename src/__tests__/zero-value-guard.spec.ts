@@ -16,6 +16,9 @@ import {
   createPaymentRequirements,
 } from './fixtures/payment-fixtures';
 
+// Solana RPC must never be reached from tests — see the helper's comment.
+jest.mock('@solana/web3.js', () => require('./helpers/solana-rpc-mock'));
+
 // Mock viem so a *valid* payment can pass the guard and reach the signature check.
 jest.mock('viem', () => {
   const actual = jest.requireActual('viem');

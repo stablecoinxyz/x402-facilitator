@@ -13,6 +13,36 @@ import {
   createPaymentRequirements,
 } from './fixtures/payment-fixtures';
 
+// Solana RPC must never be reached from tests — see the helper's comment.
+jest.mock('@solana/web3.js', () => require('./helpers/solana-rpc-mock'));
+
+// Base RPC must never be reached either. Gas estimation runs on every settle,
+// so without this each of these tests made a real mainnet call — the other half
+// of the rate-limit flakiness jest.setup.js works around with a 15s timeout.
+// Settlement itself is simulated here (jest.config.js sets
+// ALLOW_SIMULATED_SETTLEMENT), so no write path is exercised by this mock.
+jest.mock('viem', () => {
+  const actual = jest.requireActual('viem');
+  return {
+    ...actual,
+    verifyTypedData: jest.fn().mockResolvedValue(true),
+    createPublicClient: () => ({
+      readContract: jest.fn().mockResolvedValue(BigInt('999999999999999999999')),
+      getTransactionCount: jest.fn().mockResolvedValue(0),
+      getGasPrice: jest.fn().mockResolvedValue(1000000000n),
+      estimateContractGas: jest.fn().mockResolvedValue(100000n),
+      waitForTransactionReceipt: jest.fn().mockResolvedValue({ status: 'success', blockNumber: 1n, gasUsed: 50000n }),
+    }),
+    createWalletClient: () => ({
+      writeContract: jest.fn().mockResolvedValue('0xabcdef1234567890'),
+    }),
+  };
+});
+
+jest.mock('viem/accounts', () => ({
+  privateKeyToAccount: () => ({ address: '0xdeE710bB6a3b652C35B5cB74E7bdb03EE1F641E6' }),
+}));
+
 // Create test app
 function createTestApp() {
   const app = express();

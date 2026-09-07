@@ -4,10 +4,18 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
 import { config, resolveToken, toCaip2Network } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
+import { verifySolanaPayment } from '../solana/verify';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
 import logger from '../lib/logger';
+
+/**
+ * Solana settlements share one serialization queue. Unlike EVM there is no
+ * per-wallet nonce to protect; the queue exists so the replay check and the
+ * settlement that follows it cannot interleave with a duplicate request.
+ */
+const SOLANA_SETTLE_QUEUE_KEY = 'solana-facilitator';
 
 /**
  * Payment Settlement Handler - x402 V2 with ERC-2612 Permit
@@ -216,12 +224,80 @@ export async function settlePayment(req: Request, res: Response) {
     // Route by network — Solana uses CAIP-2 "solana:..." prefix
     if (network?.startsWith('solana:')) {
       log.debug({ network }, 'Solana settlement (delegated transfer)');
-      const result = await settleSolanaPayment(paymentPayload.payload, log);
-      const resultLabel = result.success ? 'success' : 'failed';
-      settleTotal.inc({ network, result: resultLabel });
+
+      // /settle validates the payment itself. It cannot lean on /verify: the spec
+      // defines flows (upfront, escrow) where /verify never runs, and even in the
+      // default flow the two are separate requests with nothing linking them.
+      // The EVM branch below re-checks signature and deadline for the same reason.
+      // Without this, an unsigned payload naming any payer who has delegated to the
+      // facilitator moves their tokens to an attacker-chosen recipient.
+      const verification = await verifySolanaPayment(paymentPayload.payload, paymentRequirements, log);
+      if (!verification.isValid) {
+        log.warn({ payer: verification.payer, network, errorReason: verification.invalidReason }, 'Solana settlement rejected');
+        settleTotal.inc({ network, result: 'failed' });
+        recordDuration(startTime, network);
+        return res.json({
+          success: false,
+          payer: verification.payer,
+          transaction: '',
+          network,
+          errorReason: verification.invalidReason ?? 'invalid_payment',
+        });
+      }
+
+      const solanaOwner: string = paymentPayload.payload.from;
+      const solanaSignature: string = paymentPayload.payload.signature;
+
+      // Replay protection. Unlike ERC-2612 there is no on-chain nonce for the chain
+      // to consume, so a captured valid payload stays replayable until its deadline.
+      //
+      // Keyed on the SIGNATURE, not the nonce. The nonce is a client-chosen string
+      // that nothing forces to be unique, so keying on it would make a second,
+      // genuinely different payment reusing the same nonce look like a replay — and
+      // hand its merchant the first payment's transaction hash. Ed25519 signs
+      // from|to|amount|nonce|deadline, so an identical payload reproduces the same
+      // signature and any changed field produces a different one.
+      //
+      // Serialized so a concurrent duplicate cannot clear the replay check before the
+      // first settlement has recorded itself. One shared queue rather than one per
+      // payer: SettlementQueue never evicts a queue once created, so a per-payer key
+      // would grow without bound, and it lowercases its key, which would merge
+      // distinct base58 payers regardless. Solana settlement volume does not need
+      // the parallelism.
+      type SolanaOutcome = {
+        replayed: boolean;
+        result: { success: boolean; payer: string; transaction: string; network: string; errorReason?: string };
+      };
+
+      const outcome: SolanaOutcome = await settlementQueue.enqueue(SOLANA_SETTLE_QUEUE_KEY, async () => {
+        const previous = nonceTracker.getSettled(network, solanaOwner, solanaSignature);
+        if (previous) {
+          return {
+            replayed: true,
+            result: { success: true, payer: previous.payer, transaction: previous.txHash, network: previous.network },
+          };
+        }
+
+        const settled = await settleSolanaPayment(paymentPayload.payload, log);
+        if (settled.success) {
+          nonceTracker.markSettled(network, solanaOwner, solanaSignature, {
+            txHash: settled.transaction,
+            payer: settled.payer,
+            network: settled.network,
+          });
+        }
+        return { replayed: false, result: settled };
+      });
+
+      if (outcome.replayed) {
+        log.info({ payer: solanaOwner, network, nonce: paymentPayload.payload.nonce, txHash: outcome.result.transaction }, 'Idempotent replay — returning original settlement');
+        settleTotal.inc({ network, result: 'replay' });
+      } else {
+        settleTotal.inc({ network, result: outcome.result.success ? 'success' : 'failed' });
+        log.info({ action: 'settle', network, success: outcome.result.success, payer: outcome.result.payer, txHash: outcome.result.transaction }, 'Settle complete');
+      }
       recordDuration(startTime, network);
-      log.info({ action: 'settle', network, success: result.success, payer: result.payer, txHash: result.transaction }, 'Settle complete');
-      return res.json(result);
+      return res.json(outcome.result);
     }
 
     // Resolve EVM network from CAIP-2 identifier
@@ -531,10 +607,20 @@ export async function settlePayment(req: Request, res: Response) {
         });
 
         log.debug({ permitHash }, 'Waiting for permit confirmation');
-        await publicClient.waitForTransactionReceipt({
+        const permitReceipt = await publicClient.waitForTransactionReceipt({
           hash: permitHash,
           confirmations: 1
         });
+        // A receipt is not a success. viem resolves for a reverted transaction too,
+        // so without this check a reverted permit reads as confirmed. Matching
+        // 'reverted' explicitly rather than "not success" so an RPC that omits the
+        // field cannot fail an otherwise good settlement.
+        if (permitReceipt.status === 'reverted') {
+          const err: any = new Error('permit transaction reverted on chain');
+          err.permitHash = permitHash;
+          err.transactionReverted = true;
+          throw err;
+        }
         log.debug({ permitHash }, 'Permit confirmed');
 
         // Step 2: Call transferFrom() to move tokens to merchant
@@ -573,10 +659,29 @@ export async function settlePayment(req: Request, res: Response) {
 
         log.debug({ txHash: transferHash }, 'Waiting for transfer confirmation');
 
-        const receipt = await publicClient.waitForTransactionReceipt({
-          hash: transferHash,
-          confirmations: 1
-        });
+        // transferFrom is broadcast: the tokens may already have moved. Past this
+        // point no failure is terminal, and every answer must carry the hash so the
+        // caller can reconcile on chain instead of re-signing a fresh permit.
+        let receipt;
+        try {
+          receipt = await publicClient.waitForTransactionReceipt({
+            hash: transferHash,
+            confirmations: 1
+          });
+        } catch (err: any) {
+          err.broadcastHash = transferHash;
+          err.permitHash = permitHash;
+          err.settlementPending = true;
+          throw err;
+        }
+
+        if (receipt.status === 'reverted') {
+          const err: any = new Error('transferFrom transaction reverted on chain');
+          err.broadcastHash = transferHash;
+          err.permitHash = permitHash;
+          err.transactionReverted = true;
+          throw err;
+        }
 
         return { txHash: transferHash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed };
       });
@@ -621,6 +726,37 @@ export async function settlePayment(req: Request, res: Response) {
       const rawNetwork = req.body.paymentPayload?.accepted?.network;
       if (rawNetwork) network = toCaip2Network(rawNetwork);
     } catch {}
+
+    // The transfer was broadcast but its outcome could not be read. Per x402 v2 this
+    // is NOT terminal and MUST carry the broadcast hash, so the caller reconciles on
+    // chain instead of reading "failed" and signing a fresh permit — a second payment.
+    if (error?.settlementPending && error?.broadcastHash) {
+      log.error({ err: error, action: 'settle', network, payer, txHash: error.broadcastHash, errorReason: 'settlement_pending' }, 'Settlement broadcast but unconfirmed');
+      settleTotal.inc({ network, result: 'settlement_pending' });
+      recordDuration(startTime, network);
+      return res.status(200).json({
+        success: false,
+        payer,
+        transaction: error.broadcastHash,
+        network,
+        errorReason: 'settlement_pending',
+      });
+    }
+
+    // Mined and reverted. A definite no, with the hash that proves it.
+    if (error?.transactionReverted) {
+      const revertedHash = error.broadcastHash || error.permitHash || '';
+      log.error({ err: error, action: 'settle', network, payer, txHash: revertedHash, errorReason: 'invalid_transaction_state' }, 'Settlement transaction reverted');
+      settleTotal.inc({ network, result: 'tx_reverted' });
+      recordDuration(startTime, network);
+      return res.status(200).json({
+        success: false,
+        payer,
+        transaction: revertedHash,
+        network,
+        errorReason: 'invalid_transaction_state',
+      });
+    }
 
     // Categorize the error for precise metrics
     const { errorCategory, errorReason } = categorizeSettleError(error);
