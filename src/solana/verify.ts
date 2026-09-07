@@ -88,7 +88,9 @@ export async function verifySolanaPayment(
     log.debug('Amount sufficient');
 
     // 4. Check recipient
-    if (to.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {
+    // Base58 is case-sensitive; comparing lowercased would make this check
+    // more permissive than it looks, and settlement now depends on it.
+    if (to !== paymentRequirements.payTo) {
       log.warn({ payer: from, to, expected: paymentRequirements.payTo }, 'Invalid recipient');
       return { isValid: false, payer: from, invalidReason: 'invalid_exact_evm_payload_recipient_mismatch' };
     }

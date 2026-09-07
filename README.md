@@ -28,8 +28,9 @@ cp .env.example .env  # configure facilitator keys per network
 ## Concurrency & Settlement Safety
 
 - **Per-EOA settlement queue** — On-chain execution is serialized per facilitator wallet to prevent nonce collisions. Critical for chains without a mempool (e.g. Radius) where concurrent nonce submissions fail immediately. Different chains settle in parallel since they use separate wallets.
-- **Idempotent settle** — If a permit nonce was already settled, `/settle` returns the original `{ success: true, transaction: "0x..." }` instead of failing. Enables safe retries when HTTP responses are lost.
-- **Partial tx hash on failure** — If `permit()` succeeds but `transferFrom()` fails, the permit tx hash is included in the error response for on-chain debugging.
+- **Idempotent settle** — If a permit nonce was already settled, `/settle` returns the original `{ success: true, transaction: "0x..." }` instead of failing. Enables safe retries when HTTP responses are lost. This covers settlements the facilitator saw through to a receipt; for one that was broadcast but whose outcome could not be read, see `settlement_pending` below.
+- **`settlement_pending` is not a failure** — If `transferFrom()` is broadcast and the receipt cannot be read (RPC timeout, node error), `/settle` answers `{ success: false, errorReason: "settlement_pending", transaction: "0x..." }`. The transaction may still confirm. Per the x402 v2 spec this response always carries the broadcast hash: **reconcile that hash on chain before deciding anything**. Do not treat it as did-not-happen and sign a fresh permit — that is a second payment. Re-presenting the same payload is also not useful, since the permit nonce is consumed on chain and the retry is answered `permit_signature_invalid`.
+- **Partial tx hash on failure** — If `permit()` succeeds but `transferFrom()` fails to broadcast, the permit tx hash is included in the error response for on-chain debugging.
 
 ## Authentication
 

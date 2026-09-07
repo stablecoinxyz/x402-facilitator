@@ -7,6 +7,32 @@
 
 import { config } from '../../config';
 
+/**
+ * Monotonic counter for fixture nonces.
+ *
+ * Date.now() alone is NOT unique here: these suites settle in simulated mode
+ * (jest.config.js sets ALLOW_SIMULATED_SETTLEMENT), so every settled payment is
+ * recorded in the nonce tracker. Two tests in the same millisecond shared a
+ * nonce, and the second hit the idempotent-replay branch and was handed the
+ * first one's success — before its own deadline or amount checks ever ran. That
+ * made any test using the default nonce pass or fail on timing.
+ */
+let fixtureNonceCounter = 0;
+
+/**
+ * EVM: the permit nonce is a uint256 in the EIP-712 struct, so it must stay
+ * numeric. Multiplying by 1000 leaves room for 1000 fixtures per millisecond
+ * and stays well inside Number.MAX_SAFE_INTEGER.
+ */
+function uniqueEvmNonce(): string {
+  return (Date.now() * 1000 + (++fixtureNonceCounter % 1000)).toString();
+}
+
+/** Solana: the nonce is an opaque string the payer signs over. */
+function uniqueSolanaNonce(): string {
+  return `sol-${Date.now()}-${++fixtureNonceCounter}`;
+}
+
 // Well-known test addresses (Hardhat accounts)
 const TEST_PAYER = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';      // account #0
 const TEST_MERCHANT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';    // account #1
@@ -37,7 +63,7 @@ export function createBasePayment(overrides?: Partial<any>) {
         value,
         validAfter: '0',
         validBefore: deadline.toString(),
-        nonce: (overrides?.nonce ?? Date.now()).toString(),
+        nonce: (overrides?.nonce ?? uniqueEvmNonce()).toString(),
       },
     },
     extensions: {},
@@ -63,7 +89,7 @@ export function createSolanaPayment(overrides?: Partial<any>) {
       from: 'DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK',
       to: '2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K',
       amount: '50000000', // 0.05 SBC
-      nonce: Date.now().toString(),
+      nonce: uniqueSolanaNonce(),
       deadline: now + 300,
       signature: '3yZe7d3YAKLBbZBN6nZMPjwBvPmMKzGvJxYQwR8pPxWKvBmKZ7LjYpzJ8cDaKQgBKCbxPHRYHqKx5gQmKzWVLZmX',
       ...overrides,
