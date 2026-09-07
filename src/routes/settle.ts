@@ -6,6 +6,7 @@ import { config, resolveToken, toCaip2Network } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { verifySolanaPayment } from '../solana/verify';
 import { settleCasperPayment } from '../casper/settle';
+import { casperAsset } from '../casper/verify';
 import { isCasperNetwork } from '../casper/networks';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
@@ -125,6 +126,11 @@ function isV1Payload(payload: any): boolean {
 function normalizeV1ToV2(payload: any, requirements: any): any {
   const network = requirements?.network || 'unknown';
   const scheme = requirements?.scheme || 'exact';
+
+  // Casper payloads are not Solana payloads; preserve mechanism-specific fields.
+  if (isCasperNetwork(toCaip2Network(network))) {
+    return { x402Version: 1, accepted: { scheme, network }, payload: { ...payload }, extensions: {} };
+  }
 
   const isSolana = network?.startsWith('solana:') ||
     (payload.from && !payload.from.startsWith('0x'));
@@ -358,6 +364,15 @@ export async function settlePayment(req: Request, res: Response) {
 
     // Route by network — Casper uses CAIP-2 "casper:..." prefix
     if (isCasperNetwork(network)) {
+      // Like the EVM settlement-mode guard, refuse an unconfigured mechanism.
+      // Match /supported: both the facilitator and this network's contract are required.
+      if (!config.casperFacilitatorAddress || !casperAsset(network)) {
+        const payer = paymentPayload.payload?.from || 'unknown';
+        log.warn({ payer, network }, 'Casper network is not configured');
+        settleTotal.inc({ network, result: 'failed' });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer, transaction: '', network, errorReason: 'invalid_network' });
+      }
       log.debug({ network }, 'Casper settlement (wCSPR CEP-18 transfer)');
       const result = await settleCasperPayment(paymentPayload.payload, paymentRequirements, network, log);
       const resultLabel = result.success ? 'success' : 'failed';

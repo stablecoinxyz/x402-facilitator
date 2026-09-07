@@ -3,7 +3,7 @@ import { createPublicClient, http, verifyTypedData } from 'viem';
 import type { Logger } from 'pino';
 import { config, resolveToken, toCaip2Network } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
-import { verifyCasperPayment } from '../casper/verify';
+import { verifyCasperPayment, casperAsset } from '../casper/verify';
 import { isCasperNetwork } from '../casper/networks';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
@@ -107,6 +107,11 @@ function normalizeV1ToV2(payload: any, requirements: any): any {
   // v1 Solana payloads have from/to/amount/signature at top level
   const network = requirements?.network || 'unknown';
   const scheme = requirements?.scheme || 'exact';
+
+  // Casper payloads are not Solana payloads; preserve mechanism-specific fields.
+  if (isCasperNetwork(toCaip2Network(network))) {
+    return { x402Version: 1, accepted: { scheme, network }, payload: { ...payload }, extensions: {} };
+  }
 
   // Check if this looks like a Solana payload (has `from` as base58, not 0x)
   const isSolana = network?.startsWith('solana:') ||
@@ -248,6 +253,15 @@ export async function verifyPayment(req: Request, res: Response) {
 
     // Route by network — Casper uses CAIP-2 "casper:..." prefix
     if (isCasperNetwork(network)) {
+      // Like the EVM settlement-mode guard, refuse an unconfigured mechanism.
+      // Match /supported: both the facilitator and this network's contract are required.
+      if (!config.casperFacilitatorAddress || !casperAsset(network)) {
+        const payer = paymentPayload.payload?.from || 'unknown';
+        log.warn({ payer, network }, 'Casper network is not configured');
+        verifyTotal.inc({ network, result: 'invalid' });
+        recordDuration(startTime, network);
+        return res.json({ isValid: false, payer, invalidReason: 'invalid_network' });
+      }
       log.debug({ network }, 'Casper payment detected');
       try {
         const result = await verifyCasperPayment(paymentPayload.payload, paymentRequirements, network, log);

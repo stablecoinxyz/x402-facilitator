@@ -131,7 +131,7 @@ export async function verifyCasperPayment(
 
 /** Default settlement asset (wCSPR contract) for a Casper network. */
 export function casperAsset(network: string): string {
-  return network === 'casper:casper-test'
-    ? config.casperTestnetWcsprContract
-    : config.casperWcsprContract;
+  if (network === 'casper:casper') return config.casperWcsprContract;
+  if (network === 'casper:casper-test') return config.casperTestnetWcsprContract;
+  return '';
 }
