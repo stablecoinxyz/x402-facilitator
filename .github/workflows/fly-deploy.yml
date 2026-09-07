@@ -19,10 +19,25 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  sabotage:
+    name: Sabotage matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # Applies deliberately partial fixes and requires the tests to go red on
+      # each. Guards against a test that passes for the wrong reason, which a
+      # green suite cannot tell you about.
+      - run: python3 scripts/sabotage-check.py
+
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, sabotage]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     concurrency: deploy-group
     steps:

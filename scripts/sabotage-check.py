@@ -11,6 +11,12 @@ to go red on every single one.
 A mutation that is NOT caught is the finding: it means no test covers that
 property, whatever the suite's green tick implies.
 
+Known weakness, stated so nobody mistakes a pass for more than it is: a mutation
+counts as caught when the test run exits non-zero, and this suite is
+intermittently flaky. A flaky failure therefore reads as "caught". That makes
+this gate fail-safe for CI but means a green result is weaker evidence than it
+looks. Re-run a surprising pass before trusting it.
+
     python3 scripts/sabotage-check.py
 
 Exits non-zero if any mutation survives. Restores every file via git, and
