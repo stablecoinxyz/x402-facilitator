@@ -193,6 +193,16 @@ describe('Nonce Replay Protection', () => {
 // =====================================================================
 
 describe('Gas Estimation Before Settle', () => {
+  // These assertions were previously gated behind
+  // `if (process.env.ENABLE_REAL_SETTLEMENT === 'true')`, which jest.config.js
+  // pins to 'false' — so the real branch never ran and the else branch asserted
+  // only that the response had a `success` key, true of every response the route
+  // can produce. Neither test could fail for the reason its title gave. The gas
+  // dry-run only happens in real mode, so the suite opts into it here.
+  const originalReal = process.env.ENABLE_REAL_SETTLEMENT;
+  beforeAll(() => { process.env.ENABLE_REAL_SETTLEMENT = 'true'; });
+  afterAll(() => { process.env.ENABLE_REAL_SETTLEMENT = originalReal; });
+
   let app: express.Application;
 
   beforeEach(() => {
@@ -218,15 +228,11 @@ describe('Gas Estimation Before Settle', () => {
       .post('/settle')
       .send({ paymentPayload, paymentRequirements });
 
-    // In real settlement mode, should fail before submitting tx
-    // In simulated mode, gas estimation is skipped
-    if (process.env.ENABLE_REAL_SETTLEMENT === 'true') {
-      expect(response.body.success).toBe(false);
-      expect(response.body.errorReason).toContain('gas_estimation_failed');
-    } else {
-      // Simulated mode — gas estimation not called
-      expect(response.body).toHaveProperty('success');
-    }
+    expect(response.body.success).toBe(false);
+    // A consumed permit reverts with an ECDSA/invalid-signature message, which
+    // the categorizer maps ahead of the generic revert branch.
+    expect(response.body.errorReason).toBe('permit_signature_invalid');
+    expect(mockWriteContract).not.toHaveBeenCalled();
   }, 15000);
 
   it('should reject settle when gas estimation shows insufficient gas', async () => {
@@ -239,12 +245,9 @@ describe('Gas Estimation Before Settle', () => {
       .post('/settle')
       .send({ paymentPayload, paymentRequirements });
 
-    if (process.env.ENABLE_REAL_SETTLEMENT === 'true') {
-      expect(response.body.success).toBe(false);
-      expect(response.body.errorReason).toContain('gas_estimation_failed');
-    } else {
-      expect(response.body).toHaveProperty('success');
-    }
+    expect(response.body.success).toBe(false);
+    expect(response.body.errorReason).toBe('insufficient_gas');
+    expect(mockWriteContract).not.toHaveBeenCalled();
   }, 15000);
 });
 

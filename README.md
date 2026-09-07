@@ -4,7 +4,7 @@ SBC x402 Facilitator — verifies and settles payments using the [x402 protocol]
 
 Uses ERC-2612 Permit for EVM chains (SBC token doesn't support EIP-3009) and delegated SPL transfers for Solana. The facilitator never holds customer funds.
 
-**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — 36/36 checks passing | **[Observability →](./grafana/README.md)**
+**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — conformant, verify with `npm run conformance` | **[Observability →](./grafana/README.md)**
 
 ## Supported Networks
 

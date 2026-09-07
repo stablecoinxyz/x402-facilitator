@@ -617,7 +617,9 @@ export async function settlePayment(req: Request, res: Response) {
             payer: owner,
             transaction: '',
             network,
-            errorReason: classified ? gasErr.errorReason : `gas_estimation_failed: ${gasError.message}`,
+            // Same reason as the categorizer: no raw text to the caller. The
+            // full gasError is on the log.warn above.
+            errorReason: classified ? gasErr.errorReason : 'gas_estimation_failed',
           });
         }
       } else {
@@ -876,13 +878,21 @@ export function categorizeSettleError(error: any): { errorCategory: string; erro
   if (msg.includes('execution reverted') || msg.includes('revert')) {
     return { errorCategory: 'tx_reverted', errorReason: `tx_reverted: ${shortMsg || msg.slice(0, 200)}` };
   }
-  if (msg.includes('timeout') || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed')) {
+  // Matched lowercased: viem's receipt timeout reads "Timed out while waiting
+  // for transaction ...", which `includes('timeout')` misses. Those errors then
+  // fell through to `unknown`, so the receipt_timeout metric under-counted and
+  // the raw message went to the caller instead of a stable code.
+  const lower = msg.toLowerCase();
+  if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('etimedout') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('fetch failed')) {
     return { errorCategory: 'rpc_error', errorReason: 'rpc_connection_error' };
   }
   if (msg.includes('TransactionReceiptNotFoundError') || msg.includes('could not be found')) {
     return { errorCategory: 'receipt_timeout', errorReason: 'tx_receipt_not_found' };
   }
-  return { errorCategory: 'unknown', errorReason: msg.slice(0, 300) };
+  // Never echo the raw message: viem and node-fetch embed the endpoint URL in
+  // their errors, and most providers carry an API key in it. The full error is
+  // already on the log line at the call site.
+  return { errorCategory: 'unknown', errorReason: 'unexpected_settle_error' };
 }
 
 function recordDuration(startTime: bigint, network: string) {

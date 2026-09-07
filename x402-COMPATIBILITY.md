@@ -6,7 +6,11 @@
 
 **Last verified:** 2026-03-09
 
-**Result:** 36/36 conformance checks passed ✓ | 187 unit tests ✓
+**Result:** all conformance checks passed ✓ | unit suite green ✓
+
+Run them yourself rather than trusting a number here — counts go stale the moment
+a check or a test is added, and both have been:
+`npm run conformance` (against a running server) and `npm test`.
 
 Run against any endpoint:
 
