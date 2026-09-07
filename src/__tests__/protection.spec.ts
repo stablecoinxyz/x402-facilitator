@@ -51,6 +51,9 @@ jest.mock('viem/accounts', () => ({
   }),
 }));
 
+// Solana RPC must never be reached from tests — see the helper's comment.
+jest.mock('@solana/web3.js', () => require('./helpers/solana-rpc-mock'));
+
 // Mock tweetnacl for Solana
 jest.mock('tweetnacl', () => ({
   sign: { detached: { verify: jest.fn().mockReturnValue(true) } },

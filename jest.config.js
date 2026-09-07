@@ -1,3 +1,10 @@
+// Tests must never reach a real RPC. Pointing these at an unroutable address
+// makes that structural instead of aspirational: anything that slips past a
+// mock fails instantly and names itself, rather than hanging on a rate-limited
+// public endpoint until Jest's timeout fires.
+process.env.SOLANA_RPC_URL = 'http://255.255.255.255:1';
+process.env.BASE_RPC_URL = 'http://255.255.255.255:1';
+
 process.env.ENABLE_REAL_SETTLEMENT = 'false';
 // Simulation is opt-in; the suites exercise the simulated path.
 process.env.ALLOW_SIMULATED_SETTLEMENT = 'true';

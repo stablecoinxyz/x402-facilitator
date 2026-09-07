@@ -124,14 +124,16 @@ export async function verifySolanaPayment(
       log.debug('Balance sufficient');
     } catch (error: any) {
       log.warn({ err: error, payer: from }, 'Error checking balance');
-      return { isValid: false, payer: from, invalidReason: `Balance check failed: ${error.message}` };
+      // The RPC client embeds the endpoint URL in its error messages, and most
+      // providers carry an API key there. Full error to the log, spec code out.
+      return { isValid: false, payer: from, invalidReason: 'unexpected_verify_error' };
     }
 
     // All checks passed
     return { isValid: true, payer: from, invalidReason: null };
   } catch (error: any) {
     log.error({ err: error }, 'Solana verification error');
-    return { isValid: false, payer: paymentPayload.from || 'unknown', invalidReason: `Verification error: ${error.message}` };
+    return { isValid: false, payer: paymentPayload.from || 'unknown', invalidReason: 'unexpected_verify_error' };
   }
 }
 

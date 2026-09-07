@@ -498,7 +498,7 @@ export async function verifyPayment(req: Request, res: Response) {
     res.status(500).json({
       isValid: false,
       payer,
-      invalidReason: `Server error: ${error.message}`,
+      invalidReason: 'unexpected_verify_error',
     });
   }
 }
