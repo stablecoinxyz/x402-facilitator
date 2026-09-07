@@ -63,7 +63,7 @@ MUTATIONS = [
         "src/solana/verify.ts",
         "    if (to !== paymentRequirements.payTo) {",
         "    if (to.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {",
-        ["src/__tests__/solana-settle-auth.spec.ts", "-t", "wrong recipient"],
+        ["src/__tests__/solana-settle-auth.spec.ts", "-t", "letter case"],
     ),
 ]
 

@@ -137,6 +137,25 @@ describe('Solana /settle authorization', () => {
     expect(response.body.success).toBe(false);
   });
 
+  it('refuses a recipient that differs from payTo only by letter case', async () => {
+    // Base58 is case-sensitive, so these are different addresses. Comparing them
+    // lowercased would make the binding accept a destination the merchant never
+    // asked for. The earlier wrong-recipient test cannot catch that: it uses two
+    // entirely different addresses, which stay different either way.
+    const flipped = MERCHANT.replace(/[a-zA-Z]/, c =>
+      c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase());
+    expect(flipped).not.toBe(MERCHANT);
+    expect(flipped.toLowerCase()).toBe(MERCHANT.toLowerCase());
+
+    const payment = signedPayment(); // signed to pay MERCHANT
+    const response = await request(app)
+      .post('/settle')
+      .send({ paymentPayload: payment, paymentRequirements: requirements(flipped) });
+
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(response.body.success).toBe(false);
+  });
+
   it('refuses a signed payment worth less than the resource requires', async () => {
     const payment = signedPayment();
 
