@@ -71,6 +71,12 @@ function createTestApp() {
 
 describe('Solana /settle authorization', () => {
   let app: express.Application;
+  const originalReal = process.env.ENABLE_REAL_SETTLEMENT;
+
+  // jest.config.js runs the suites in simulated mode. These cases are about
+  // whether the REAL settle function is reached, so they need real mode.
+  beforeAll(() => { process.env.ENABLE_REAL_SETTLEMENT = 'true'; });
+  afterAll(() => { process.env.ENABLE_REAL_SETTLEMENT = originalReal; });
 
   beforeEach(() => {
     app = createTestApp();
@@ -221,5 +227,66 @@ describe('Solana /settle authorization', () => {
     expect(mockedSettle).toHaveBeenCalledTimes(2);
     expect(secondRes.body.success).toBe(true);
     expect(secondRes.body.transaction).not.toBe(firstRes.body.transaction);
+  });
+});
+
+describe('Solana /settle honors the settlement kill switch', () => {
+  // The switch gates whether this process may move money. It covered the EVM
+  // path only: the Solana branch returned before the gate, so a deployment
+  // configured for simulation still executed real SPL transfers.
+  let app: express.Application;
+  const originalReal = process.env.ENABLE_REAL_SETTLEMENT;
+  const originalSim = process.env.ALLOW_SIMULATED_SETTLEMENT;
+
+  beforeEach(() => {
+    app = createTestApp();
+    mockedSettle.mockReset();
+    mockedSettle.mockResolvedValue({
+      success: true, payer: 'p', transaction: 'REAL_TX', network: SOLANA_MAINNET,
+    });
+  });
+
+  afterEach(() => {
+    process.env.ENABLE_REAL_SETTLEMENT = originalReal;
+    process.env.ALLOW_SIMULATED_SETTLEMENT = originalSim;
+  });
+
+  it('refuses when neither flag is set, and touches no chain', async () => {
+    delete process.env.ENABLE_REAL_SETTLEMENT;
+    delete process.env.ALLOW_SIMULATED_SETTLEMENT;
+
+    const response = await request(app)
+      .post('/settle')
+      .send({ paymentPayload: signedPayment(), paymentRequirements: requirements() });
+
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(response.body.success).toBe(false);
+    expect(response.body.errorReason).toBe('settlement_disabled');
+    expect(response.body.transaction).toBe('');
+  });
+
+  it('does not move tokens in simulated mode, and marks the response', async () => {
+    delete process.env.ENABLE_REAL_SETTLEMENT;
+    process.env.ALLOW_SIMULATED_SETTLEMENT = 'true';
+
+    const response = await request(app)
+      .post('/settle')
+      .send({ paymentPayload: signedPayment(), paymentRequirements: requirements() });
+
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(response.headers['x-settlement-mode']).toBe('simulated');
+    expect(response.body.transaction).not.toBe('REAL_TX');
+  });
+
+  it('settles for real only when the real flag is set', async () => {
+    process.env.ENABLE_REAL_SETTLEMENT = 'true';
+
+    const response = await request(app)
+      .post('/settle')
+      .send({ paymentPayload: signedPayment(), paymentRequirements: requirements() });
+
+    expect(mockedSettle).toHaveBeenCalledTimes(1);
+    expect(response.body.transaction).toBe('REAL_TX');
+    expect(response.headers['x-settlement-mode']).toBeUndefined();
   });
 });

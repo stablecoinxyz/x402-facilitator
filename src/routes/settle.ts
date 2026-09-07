@@ -17,6 +17,24 @@ import logger from '../lib/logger';
  */
 const SOLANA_SETTLE_QUEUE_KEY = 'solana-facilitator';
 
+type SettlementMode = 'real' | 'simulated' | 'disabled';
+
+/**
+ * Whether this process may move money, and how. EVERY chain must resolve it
+ * here rather than reading the environment itself.
+ *
+ * They diverged once, and it reached production: the Solana branch returned
+ * before the EVM branch's gate, so a deployment with ENABLE_REAL_SETTLEMENT
+ * unset refused EVM settlements — correctly — while still executing real SPL
+ * transfers. A kill switch that covers one of two chains reads as a kill switch
+ * and is not one.
+ */
+function resolveSettlementMode(): SettlementMode {
+  if (process.env.ENABLE_REAL_SETTLEMENT === 'true') return 'real';
+  if (process.env.ALLOW_SIMULATED_SETTLEMENT === 'true') return 'simulated';
+  return 'disabled';
+}
+
 /**
  * Payment Settlement Handler - x402 V2 with ERC-2612 Permit
  *
@@ -266,15 +284,49 @@ export async function settlePayment(req: Request, res: Response) {
       // the parallelism.
       type SolanaOutcome = {
         replayed: boolean;
+        simulated: boolean;
         result: { success: boolean; payer: string; transaction: string; network: string; errorReason?: string };
       };
+
+      const solanaMode = resolveSettlementMode();
+      if (solanaMode === 'disabled') {
+        log.error({ payer: solanaOwner, network, errorReason: 'settlement_disabled' }, 'Settlement refused: ENABLE_REAL_SETTLEMENT is not "true" and ALLOW_SIMULATED_SETTLEMENT is not set');
+        settleTotal.inc({ network, result: 'settlement_disabled' });
+        recordDuration(startTime, network);
+        return res.json({
+          success: false,
+          payer: solanaOwner,
+          transaction: '',
+          network,
+          errorReason: 'settlement_disabled',
+        });
+      }
 
       const outcome: SolanaOutcome = await settlementQueue.enqueue(SOLANA_SETTLE_QUEUE_KEY, async () => {
         const previous = nonceTracker.getSettled(network, solanaOwner, solanaSignature);
         if (previous) {
           return {
             replayed: true,
+            simulated: previous.simulated === true,
             result: { success: true, payer: previous.payer, transaction: previous.txHash, network: previous.network },
+          };
+        }
+
+        if (solanaMode === 'simulated') {
+          // Nothing is sent to any chain. The signature is fabricated, and the
+          // response carries X-Settlement-Mode so it can never pass for real.
+          const fakeSignature = `SIMULATED${Math.random().toString(36).slice(2)}${Date.now()}`;
+          log.warn({ payer: solanaOwner, network, mode: 'simulated' }, 'Simulated Solana settlement: no on-chain transaction');
+          nonceTracker.markSettled(network, solanaOwner, solanaSignature, {
+            txHash: fakeSignature,
+            payer: solanaOwner,
+            network,
+            simulated: true,
+          });
+          return {
+            replayed: false,
+            simulated: true,
+            result: { success: true, payer: solanaOwner, transaction: fakeSignature, network },
           };
         }
 
@@ -286,8 +338,10 @@ export async function settlePayment(req: Request, res: Response) {
             network: settled.network,
           });
         }
-        return { replayed: false, result: settled };
+        return { replayed: false, simulated: false, result: settled };
       });
+
+      if (outcome.simulated) res.set('X-Settlement-Mode', 'simulated');
 
       if (outcome.replayed) {
         log.info({ payer: solanaOwner, network, nonce: paymentPayload.payload.nonce, txHash: outcome.result.transaction }, 'Idempotent replay — returning original settlement');
@@ -474,10 +528,10 @@ export async function settlePayment(req: Request, res: Response) {
     // route refuses, instead of reporting a settlement that never happened. It used
     // to fall through to simulation by default, so a fresh deploy answered every
     // settle with success:true and a random hash (issue #2).
-    const useRealSettlement = process.env.ENABLE_REAL_SETTLEMENT === 'true';
-    const allowSimulated = process.env.ALLOW_SIMULATED_SETTLEMENT === 'true';
+    const evmMode = resolveSettlementMode();
+    const useRealSettlement = evmMode === 'real';
 
-    if (!useRealSettlement && !allowSimulated) {
+    if (evmMode === 'disabled') {
       log.error({ payer: owner, network, errorReason: 'settlement_disabled' }, 'Settlement refused: ENABLE_REAL_SETTLEMENT is not "true" and ALLOW_SIMULATED_SETTLEMENT is not set');
       settleTotal.inc({ network, result: 'settlement_disabled' });
       recordDuration(startTime, network);
