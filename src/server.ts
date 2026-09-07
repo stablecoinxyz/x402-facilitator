@@ -47,9 +47,27 @@ app.post('/settle', paymentRateLimiter, settlePayment);
 
 // Start server — try config.port, then increment until an available port is found
 function startServer(port: number) {
+
+/** Host of an RPC URL, never its path or query: those carry the API key. */
+function rpcHost(url: string | undefined): string {
+  if (!url) return '(unset)';
+  try { return new URL(url).host; } catch { return '(unparseable)'; }
+}
+
   const server = app.listen(port, () => {
     logger.info({
       port,
+      // Announce the RPC endpoints this process actually loaded. An operator
+      // cannot verify what the running service will not tell them, and a stale
+      // process holding an old value looks identical to a fresh one otherwise.
+      // Host only — the path and query carry the API key on most providers.
+      rpc: {
+        solana: rpcHost(config.solanaRpcUrl),
+        base: rpcHost(config.baseRpcUrl),
+      },
+      settlement: process.env.ENABLE_REAL_SETTLEMENT === 'true'
+        ? 'real'
+        : (process.env.ALLOW_SIMULATED_SETTLEMENT === 'true' ? 'simulated' : 'disabled'),
       networks: {
         baseMainnet: config.baseFacilitatorAddress || null,
         baseSepolia: config.baseSepoliaFacilitatorAddress || null,
