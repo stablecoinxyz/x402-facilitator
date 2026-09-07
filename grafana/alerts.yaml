@@ -21,7 +21,12 @@
 #                 insufficient_allowance, tx_reverted, unknown,
 #                 settlement_disabled (neither ENABLE_REAL_SETTLEMENT nor
 #                 ALLOW_SIMULATED_SETTLEMENT is set: a misconfigured deploy
-#                 refusing every settle, which must page)
+#                 refusing every settle, which must page),
+#                 settlement_pending (the transfer was broadcast and its
+#                 receipt could not be read: the money may have moved and a
+#                 human must reconcile the hash on chain, so it pages. Before
+#                 this label existed these landed in `unknown`, so leaving it
+#                 out of the rule would REMOVE paging that exists today)
 #
 # History: the previous "Settle failure rate high" was a ratio with no
 # minimum-volume floor that counted client errors as facilitator failures.
