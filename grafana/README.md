@@ -131,10 +131,10 @@ That is normal and does not mean logs are being discarded.
 |--------|---------|----------|
 | `success` | Settlement completed on-chain | OK |
 | `failed` | Known failure (gas estimation, bad payload, unknown network) | Expected |
-| `expired` | Permit deadline passed or within 30s safety margin | Expected |
+| `expired` | Authorization deadline passed before settlement | Expected |
 | `replay` | Nonce already settled (duplicate request) | Expected |
 | `bad_request` | Missing paymentPayload | Client error |
-| `insufficient_allowance` | permit() succeeded but transferFrom sees no allowance | Investigate |
+| `insufficient_allowance` | Token allowance insufficient at transfer time | Investigate |
 | `nonce_conflict` | Tx nonce collision (concurrent settlements) | Investigate |
 | `gas_error` | Insufficient gas or gas price too low | Investigate |
 | `invalid_signature` | ECDSA signature invalid on-chain | Client error |

@@ -2,6 +2,15 @@
 
 Scope: application code, deployment configuration, installed production dependency graph, and x402 protocol requirements. This is a source review, not a penetration test of the deployed Fly application or its RPC and Casper-facilitator dependencies.
 
+## Status update — `feat/permit2-exact-evm`
+
+The findings below were reviewed against commit `f904799`; the Permit2 migration on this branch has shifted the cited line numbers. Addressed here in code (not yet re-verified on chain):
+
+- **Critical (EVM permits do not bind `payTo`)** and **High (EVM transfers the permit maximum)** — EVM Exact settlement now requires a Permit2 witness that binds `witness.to` and the exact `permitted.amount`, enforced by the canonical x402 proxy; legacy ERC-2612 EVM payloads are rejected.
+- **High (Radius skips the only pre-broadcast validity check)** — partially addressed: the Permit2 EIP-712 signature is now verified locally on every chain before settlement; Radius still skips the on-chain proxy simulation.
+
+Not addressed here and queued in [`TODO.md`](../TODO.md): the Solana double-pay durability gap, unbounded queue/rate controls, Casper error reflection, and the production dependency advisories.
+
 ## Executive summary
 
 Do not use the current Solana or public EVM settlement paths for production payments until the first two findings are resolved. An ERC-2612 permit approves a spender but does not bind a transfer recipient; this public facilitator takes the recipient from an untrusted settlement request. Separately, Solana replay protection is process-local and is deliberately not recorded after a broadcast whose confirmation cannot be read, so the same signed authorization can result in more than one token transfer.

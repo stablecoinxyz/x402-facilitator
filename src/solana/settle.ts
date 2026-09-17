@@ -35,7 +35,7 @@ interface SolanaPaymentPayload {
  * - Agent has pre-approved facilitator as delegate (one-time setup)
  * - Facilitator executes transfer FROM agent TO merchant
  * - Facilitator NEVER holds customer funds
- * - Same pattern as Base ERC-20 transferFrom()
+ * - Delegated-transfer analogue of an ERC-20 approve + transferFrom
  */
 export async function settleSolanaPayment(
   paymentPayload: SolanaPaymentPayload,

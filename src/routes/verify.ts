@@ -8,12 +8,14 @@ import logger from '../lib/logger';
 import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, PERMIT2_ADDRESS } from '../evm/permit2';
 
 /**
- * Payment Verification Handler - x402 V2 with ERC-2612 Permit
+ * Payment Verification Handler - x402 V2 Exact
  *
  * Verifies payment authorizations for multiple networks:
  *
  * - Solana: Ed25519 signature verification (handled by solana/verify.ts)
- * - Base/Radius: ERC-2612 Permit signature verification
+ * - Base/Radius: Permit2 witness verification (official Exact EVM path). Legacy
+ *   ERC-2612 EVM authorizations are rejected; the ERC-2612 code further down is
+ *   currently unreachable.
  */
 
 // ERC-2612 Permit EIP-712 Types

@@ -28,9 +28,9 @@ cp .env.example .env  # configure facilitator keys per network
 ## Concurrency & Settlement Safety
 
 - **Per-EOA settlement queue** — On-chain execution is serialized per facilitator wallet to prevent nonce collisions. Critical for chains without a mempool (e.g. Radius) where concurrent nonce submissions fail immediately. Different chains settle in parallel since they use separate wallets.
-- **Idempotent settle** — If a permit nonce was already settled, `/settle` returns the original `{ success: true, transaction: "0x..." }` instead of failing. Enables safe retries when HTTP responses are lost. This covers settlements the facilitator saw through to a receipt; for one that was broadcast but whose outcome could not be read, see `settlement_pending` below.
-- **`settlement_pending` is not a failure** — If `transferFrom()` is broadcast and the receipt cannot be read (RPC timeout, node error), `/settle` answers `{ success: false, errorReason: "settlement_pending", transaction: "0x..." }`. The transaction may still confirm. Per the x402 v2 spec this response always carries the broadcast hash: **reconcile that hash on chain before deciding anything**. Do not treat it as did-not-happen and sign a fresh permit — that is a second payment. Re-presenting the same payload is also not useful, since the permit nonce is consumed on chain and the retry is answered `permit_signature_invalid`.
-- **Partial tx hash on failure** — If `permit()` succeeds but `transferFrom()` fails to broadcast, the permit tx hash is included in the error response for on-chain debugging.
+- **Idempotent settle (Solana / simulated EVM)** — For Solana and simulated EVM settlements the facilitator records the settled authorization in memory and replays the original `{ success: true, transaction: "0x..." }` on a duplicate, so a lost HTTP response is safe to retry. Live EVM Permit2 keeps no such in-memory record: duplicate protection is the on-chain Permit2 nonce plus the per-wallet queue, so a replayed payload is rejected on chain (its nonce is already spent) rather than replaying the original success.
+- **`settlement_pending` is not a failure** — If the Permit2 settlement is broadcast and the receipt cannot be read (RPC timeout, node error), `/settle` answers `{ success: false, errorReason: "settlement_pending", transaction: "0x..." }`. The transaction may still confirm. Per the x402 v2 spec this response always carries the broadcast hash: **reconcile that hash on chain before deciding anything**. Do not treat it as did-not-happen and sign a fresh authorization — that is a second payment. Re-presenting the same payload is also not useful: the Permit2 nonce is consumed on chain, so the retry reverts.
+- **Reverted tx carries its hash** — If the Permit2 settlement is mined and reverts, `/settle` answers `{ success: false, errorReason: "invalid_transaction_state", transaction: "0x..." }` with the reverted tx hash for on-chain debugging.
 
 ## Authentication
 
@@ -54,16 +54,23 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
   "paymentPayload": {
     "x402Version": 2,
     "resource": "https://...",
-    "accepted": { "scheme": "exact", "network": "eip155:8453" },
+    "accepted": {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "10000",
+      "asset": "0x...",
+      "payTo": "0x...",
+      "extra": { "assetTransferMethod": "permit2", "name": "Stable Coin", "version": "1" }
+    },
     "payload": {
       "signature": "0x...",
-      "authorization": {
+      "permit2Authorization": {
         "from": "0x...",
-        "to": "0x...",
-        "value": "10000",
-        "validAfter": "0",
-        "validBefore": "1700000000",
-        "nonce": "0"
+        "permitted": { "token": "0x...", "amount": "10000" },
+        "spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+        "nonce": "0",
+        "deadline": "1700000000",
+        "witness": { "to": "0x...", "validAfter": "0" }
       }
     },
     "extensions": {}
@@ -79,6 +86,8 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
   }
 }
 ```
+
+`payload.permit2Authorization` is the signed Permit2 witness. `spender` is the canonical x402 proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`), `permitted.token` is the asset, and `witness.to` is the merchant `payTo` — the proxy enforces `witness.to`, so the facilitator cannot redirect the payment. If the payer has not pre-approved Permit2 on-chain, add an `eip2612GasSponsoring` extension under `extensions` carrying a signed SBC ERC-2612 permit. Its `info` object holds `from`, `asset`, `spender` (the Permit2 contract `0x000000000022D473030F116dDEE9F6B43aC78BA3`), `amount`, `nonce`, `deadline`, `signature`, and `version: "1"`.
 
 ## Configuration
 
@@ -98,7 +107,7 @@ Simulation is opt-in. A deployment with neither flag set refuses to settle rathe
 
 ## Demo
 
-Interactive demo using SBC tokens. Generates wallets, checks balances, approves the facilitator, then sends a v2 verify + settle request.
+Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain approval the facilitator needs, then sends a v2 verify + settle request.
 
 ```bash
 npm run setup -- --network <name>   # generate wallets, approve, write .env

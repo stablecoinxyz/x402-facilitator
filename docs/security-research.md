@@ -34,10 +34,13 @@ that verification or settlement occurs before resource execution.
 
 ## ERC-2612 recipient/amount distinction (material)
 
-This repository's EVM path uses ERC-2612 `permit` followed by ERC-20
-`transferFrom`, while the x402 reference `exact` EVM flow defaults to
-EIP-3009 and its `transferWithAuthorization` (or uses the distinct Permit2
-path). ([x402 EVM methods](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md#l7-l17))
+This repository's EVM path has since migrated to the Permit2 Exact EVM flow via
+the canonical x402 proxy (see [`x402-COMPATIBILITY.md`](../x402-COMPATIBILITY.md)),
+which binds recipient and amount in the signed witness. The analysis below is
+retained as the rationale for that change. The prior mechanism used ERC-2612
+`permit` followed by ERC-20 `transferFrom`, while the x402 reference `exact` EVM
+flow defaults to EIP-3009 and its `transferWithAuthorization` (or uses the
+distinct Permit2 path). ([x402 EVM methods](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md#l7-l17))
 
 That difference matters: ERC-2612 signs an allowance tuple
 `(owner, spender, value, nonce, deadline)` and the permit call sets the

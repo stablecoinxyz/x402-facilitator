@@ -156,6 +156,6 @@ Before settlement:
 ## Reference Implementation
 
 - **SBC x402 Facilitator** — https://x402.stablecoin.xyz
-- 187 unit tests including security exploit coverage
-- 36/36 v2 conformance checks
-- 5 networks: Base, Base Sepolia, Radius, Radius Testnet, Solana
+- Unit tests including security exploit coverage (`npm test`)
+- v2 conformance checks (`npm run conformance`)
+- Networks: Base, Base Sepolia, Radius, Radius Testnet, Solana

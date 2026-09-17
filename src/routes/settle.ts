@@ -38,16 +38,18 @@ function resolveSettlementMode(): SettlementMode {
 }
 
 /**
- * Payment Settlement Handler - x402 V2 with ERC-2612 Permit
+ * Payment Settlement Handler - x402 V2 Exact
  *
  * Executes on-chain transfers for multiple networks:
  *
  * - Solana: Delegated SPL token transfer (handled by solana/settle.ts)
  *   Facilitator executes transfer as delegate: Agent → Merchant
  *
- * - Base/Radius: ERC-2612 Permit + TransferFrom
- *   1. Facilitator calls permit(owner, spender, value, deadline, v, r, s)
- *   2. Facilitator calls transferFrom(owner, recipient, value)
+ * - Base/Radius: Permit2 via the canonical x402 proxy (official Exact EVM path).
+ *   The facilitator calls settle() / settleWithPermit() on the proxy, which
+ *   enforces the signed witness recipient. Legacy ERC-2612 EVM authorizations
+ *   are rejected; the permit() + transferFrom() code further down is currently
+ *   unreachable.
  *   Tokens flow: Payer → Merchant (facilitator never holds funds)
  *
  * All settlement methods maintain non-custodial properties - the facilitator
