@@ -32,7 +32,7 @@ Legacy transactions need one fee param (`gasPrice`), EIP-1559 needs two (`maxFee
 
 `eth_estimateGas` always fails on Radius with "Exec Failed" regardless of transaction type or fee parameters. This is a Turnstile simulation issue — the RPC's gas estimation logic doesn't correctly account for Turnstile's SBC→RUSD auto-conversion.
 
-**Impact:** Gas estimation dry-runs (which protect against wasted gas on Base) are **skipped for Radius**. The facilitator proceeds directly to `writeContract` without pre-flight estimation.
+**Impact:** The pre-broadcast proxy simulation (which protects against wasted gas on Base) is **skipped for Radius**. The facilitator proceeds directly to `writeContract` without a pre-flight simulation.
 
 **Tested combinations:**
 
@@ -60,12 +60,12 @@ Legacy transactions need one fee param (`gasPrice`), EIP-1559 needs two (`maxFee
 ## Facilitator Code Path
 
 ```
-settle request for eip155:723487 (or legacy eip155:723) or eip155:72344
+settle request for eip155:723487 or eip155:72344
   → isRadius = true
+  → skip proxy simulation on Radius
   → gasPrice = eth_gasPrice() + 1 gwei
-  → skip gas estimation (eth_estimateGas broken)
-  → writeContract permit() with gasPrice override (type 0 legacy)
-  → writeContract transferFrom() with gasPrice override (type 0 legacy)
+  → writeContract settle() or settleWithPermit() on the x402 Permit2 proxy
+    (type 0 legacy, gasPrice override)
 ```
 
 ## Test Script

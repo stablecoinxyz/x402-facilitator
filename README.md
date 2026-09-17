@@ -2,18 +2,18 @@
 
 SBC x402 Facilitator — verifies and settles payments using the [x402 protocol](https://github.com/coinbase/x402) (v2).
 
-Uses ERC-2612 Permit for EVM chains (SBC token doesn't support EIP-3009) and delegated SPL transfers for Solana. The facilitator never holds customer funds.
+Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 support is used only by the optional `eip2612GasSponsoring` extension to establish Permit2 allowance; the Permit2 witness and canonical x402 proxy bind the payment recipient and amount. Solana uses delegated SPL transfers.
 
-**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — conformant, verify with `npm run conformance` | **[Observability →](./grafana/README.md)**
+**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — unit suite green (`npm test`); the `npm run conformance` harness still builds legacy ERC-2612 EVM payloads and is pending migration to Permit2 | **[Observability →](./grafana/README.md)**
 
 ## Supported Networks
 
 | Network | CAIP-2 ID | Env Prefix | Mechanism |
 |---------|-----------|-----------|-----------|
-| Base | `eip155:8453` | `BASE_` | ERC-2612 Permit + TransferFrom |
-| Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | ERC-2612 Permit + TransferFrom |
-| Radius | `eip155:723487` | `RADIUS_` | ERC-2612 Permit + TransferFrom |
-| Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | ERC-2612 Permit + TransferFrom |
+| Base | `eip155:8453` | `BASE_` | Permit2 + canonical x402 proxy |
+| Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | Permit2 + canonical x402 proxy |
+| Radius | `eip155:723487` | `RADIUS_` | Permit2 + canonical x402 proxy |
+| Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | Permit2 + canonical x402 proxy |
 | Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | `SOLANA_` | Delegated SPL token transfer |
 
 Each network has its own env vars — mainnets and testnets can be configured simultaneously.
@@ -28,9 +28,9 @@ cp .env.example .env  # configure facilitator keys per network
 ## Concurrency & Settlement Safety
 
 - **Per-EOA settlement queue** — On-chain execution is serialized per facilitator wallet to prevent nonce collisions. Critical for chains without a mempool (e.g. Radius) where concurrent nonce submissions fail immediately. Different chains settle in parallel since they use separate wallets.
-- **Idempotent settle** — If a permit nonce was already settled, `/settle` returns the original `{ success: true, transaction: "0x..." }` instead of failing. Enables safe retries when HTTP responses are lost. This covers settlements the facilitator saw through to a receipt; for one that was broadcast but whose outcome could not be read, see `settlement_pending` below.
-- **`settlement_pending` is not a failure** — If `transferFrom()` is broadcast and the receipt cannot be read (RPC timeout, node error), `/settle` answers `{ success: false, errorReason: "settlement_pending", transaction: "0x..." }`. The transaction may still confirm. Per the x402 v2 spec this response always carries the broadcast hash: **reconcile that hash on chain before deciding anything**. Do not treat it as did-not-happen and sign a fresh permit — that is a second payment. Re-presenting the same payload is also not useful, since the permit nonce is consumed on chain and the retry is answered `permit_signature_invalid`.
-- **Partial tx hash on failure** — If `permit()` succeeds but `transferFrom()` fails to broadcast, the permit tx hash is included in the error response for on-chain debugging.
+- **Idempotent settle (Solana / simulated EVM)** — For Solana and simulated EVM settlements the facilitator records the settled authorization in memory and replays the original `{ success: true, transaction: "0x..." }` on a duplicate, so a lost HTTP response is safe to retry. Live EVM Permit2 keeps no such in-memory record: duplicate protection is the on-chain Permit2 nonce plus the per-wallet queue, so a replayed payload is rejected on chain (its nonce is already spent) rather than replaying the original success.
+- **`settlement_pending` is not a failure** — If the Permit2 settlement is broadcast and the receipt cannot be read (RPC timeout, node error), `/settle` answers `{ success: false, errorReason: "settlement_pending", transaction: "0x..." }`. The transaction may still confirm. Per the x402 v2 spec this response always carries the broadcast hash: **reconcile that hash on chain before deciding anything**. Do not treat it as did-not-happen and sign a fresh authorization — that is a second payment. Re-presenting the same payload is also not useful: the Permit2 nonce is consumed on chain, so the retry reverts.
+- **Reverted tx carries its hash** — If the Permit2 settlement is mined and reverts, `/settle` answers `{ success: false, errorReason: "invalid_transaction_state", transaction: "0x..." }` with the reverted tx hash for on-chain debugging.
 
 ## Authentication
 
@@ -54,16 +54,23 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
   "paymentPayload": {
     "x402Version": 2,
     "resource": "https://...",
-    "accepted": { "scheme": "exact", "network": "eip155:8453" },
+    "accepted": {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "10000",
+      "asset": "0x...",
+      "payTo": "0x...",
+      "extra": { "assetTransferMethod": "permit2", "name": "Stable Coin", "version": "1" }
+    },
     "payload": {
       "signature": "0x...",
-      "authorization": {
+      "permit2Authorization": {
         "from": "0x...",
-        "to": "0x...",
-        "value": "10000",
-        "validAfter": "0",
-        "validBefore": "1700000000",
-        "nonce": "0"
+        "permitted": { "token": "0x...", "amount": "10000" },
+        "spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+        "nonce": "0",
+        "deadline": "1700000000",
+        "witness": { "to": "0x...", "validAfter": "0" }
       }
     },
     "extensions": {}
@@ -75,10 +82,12 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
     "asset": "0x...",
     "payTo": "0x...",
     "maxTimeoutSeconds": 60,
-    "extra": { "assetTransferMethod": "erc2612", "name": "Stable Coin", "version": "1" }
+    "extra": { "assetTransferMethod": "permit2", "name": "Stable Coin", "version": "1" }
   }
 }
 ```
+
+`payload.permit2Authorization` is the signed Permit2 witness. `spender` is the canonical x402 proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`), `permitted.token` is the asset, and `witness.to` is the merchant `payTo` — the proxy enforces `witness.to`, so the facilitator cannot redirect the payment. If the payer has not pre-approved Permit2 on-chain, add an `eip2612GasSponsoring` extension under `extensions` carrying a signed SBC ERC-2612 permit. Its `info` object holds `from`, `asset`, `spender` (the Permit2 contract `0x000000000022D473030F116dDEE9F6B43aC78BA3`), `amount`, `nonce`, `deadline`, `signature`, and `version: "1"`.
 
 ## Configuration
 
@@ -98,7 +107,9 @@ Simulation is opt-in. A deployment with neither flag set refuses to settle rathe
 
 ## Demo
 
-Interactive demo using SBC tokens. Generates wallets, checks balances, approves the facilitator, then sends a v2 verify + settle request.
+Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain approval the facilitator needs, then sends a v2 verify + settle request.
+
+> **Note:** the bundled demo client (`demo/`), the mainnet smoke script (`scripts/smoke-mainnet.ts`), and the conformance harness (`src/__tests__/conformance.ts`) still build legacy ERC-2612 EVM payloads, which the migrated facilitator now rejects with `unsupported_asset_transfer_method` / `invalid_payload`. `npm run demo` and `npm run conformance` against a Permit2 EVM endpoint fail until those clients are migrated to the Permit2 witness. The Solana smoke scripts (`scripts/smoke-solana-*.ts`) are unaffected. The Permit2 flow described below is the target shape.
 
 ```bash
 npm run setup -- --network <name>   # generate wallets, approve, write .env
@@ -120,7 +131,7 @@ To run against a deployed facilitator instead of a local server:
 FACILITATOR_URL=https://x402.stablecoin.xyz npm run demo -- --network radius-testnet
 ```
 
-The demo client signs an ERC-2612 Permit off-chain (no gas), then the facilitator calls `permit()` + `transferFrom()` on-chain to move SBC from Client → Merchant. The client wallet needs SBC; the facilitator only needs ETH for gas.
+For SBC, clients sign a Permit2 payment witness. They either approve Permit2 once on-chain or include the standard `eip2612GasSponsoring` extension, which lets the canonical x402 proxy submit an SBC ERC-2612 approval and settle atomically. The witness binds the merchant recipient and exact amount.
 
 ## Observability
 
@@ -143,7 +154,7 @@ Set `LOG_LEVEL` env var to control verbosity (`debug`, `info`, `warn`, `error`).
 | Metric | Type | Labels |
 |--------|------|--------|
 | `x402_verify_total` | Counter | `network`, `result` (valid/invalid/bad_request/rpc_error/unknown) |
-| `x402_settle_total` | Counter | `network`, `result` (success/failed/replay/expired/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown) |
+| `x402_settle_total` | Counter | `network`, `result` (success/failed/settlement_pending/settlement_disabled/replay/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown; `expired` is a legacy label no live path emits — see [grafana/README.md](./grafana/README.md#settle-result-labels)) |
 | `x402_verify_duration_seconds` | Histogram | `network` |
 | `x402_settle_duration_seconds` | Histogram | `network` |
 | Default process metrics | — | CPU, memory, event loop lag |
@@ -185,20 +196,25 @@ sum by (network) (rate(x402_settle_total{result!="success"}[5m]))
 
 See [`grafana/alerts.yaml`](./grafana/alerts.yaml) for full PromQL expressions.
 
-| Alert | Condition |
-|-------|-----------|
-| Settle failure rate high | Non-success rate > 10% over 5min |
-| RPC errors spiking | 3+ RPC failures in 5min |
-| Nonce conflicts detected | Any nonce collision |
-| Permit expired attempts | Any expired permit settle |
-| Signature errors spiking | 3+ invalid signatures in 5min |
-| Health down | No facilitator logs for 10min |
+These mirror the generated `grafana/alerts.yaml` snapshot (regenerated from live Grafana, not hand-edited):
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| Facilitator unreachable | Critical | `/metrics` unreachable for 5min |
+| Settle faults on our side | Critical | 2+ facilitator-fault settle errors in 15min |
+| Verify faults on our side | Critical | 3+ facilitator-fault verify errors in 15min |
+| Facilitator restart loop | Warning | 4+ restarts in 30min |
+| Nonce conflicts detected | Warning | Any nonce conflict in 15min |
+| Settle latency p95 high | Warning | p95 settle latency > 60s over 30min |
+| Client error volume elevated | Info | 20+ client-side settle rejections in 1h |
+| Permit expired attempts (dashboard only) | Info | 10+ `expired`-result attempts in 1h — legacy label no live path emits |
+| Settlement succeeded | Info | Any successful settle in 1h |
 
 ## Development
 
 ```bash
 npm run dev           # watch mode (auto-restart)
-npm test              # run tests (187 tests)
+npm test              # run the test suite
 npm run build         # compile TypeScript
 npm start             # production
 fly deploy            # deploy to Fly.io

@@ -100,26 +100,25 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       };
     }
 
-    it('should include Base mainnet under both identifiers if configured', async () => {
+    it('should include Base mainnet as v2 Permit2 kinds if configured', async () => {
       const response = await request(app).get('/supported');
       const { v2, v1 } = kindsFor(response.body, 'eip155:8453', 'base');
 
       if (v2.length > 0) {
         // SBC + USDC under each version
         expect(v2).toHaveLength(2);
-        expect(v1).toHaveLength(2);
-        expect(v2[0].extra.assetTransferMethod).toBe('erc2612');
-        expect(v1[0].extra.assetTransferMethod).toBe('erc2612');
+        expect(v1).toHaveLength(0);
+        expect(v2[0].extra.assetTransferMethod).toBe('permit2');
       }
     });
 
-    it('should include Base Sepolia under both identifiers if configured', async () => {
+    it('should include Base Sepolia as v2 Permit2 kinds if configured', async () => {
       const response = await request(app).get('/supported');
       const { v2, v1 } = kindsFor(response.body, 'eip155:84532', 'base-sepolia');
 
       if (v2.length > 0) {
         expect(v2).toHaveLength(2);
-        expect(v1).toHaveLength(2);
+        expect(v1).toHaveLength(0);
       }
     });
 
@@ -177,24 +176,26 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       });
     });
 
-    it('should advertise v1 kinds with plain names, never CAIP-2', async () => {
+    it('should advertise EVM only as v2 permit2 kinds, never v1', async () => {
       const response = await request(app).get('/supported');
-      const v1Kinds = response.body.kinds?.filter((k: any) => k.x402Version === 1);
+      const evmV1 = response.body.kinds.filter((k: any) => k.x402Version === 1 && k.network.startsWith('eip155:'));
+      const evmV2Permit2 = response.body.kinds.filter(
+        (k: any) => k.x402Version === 2 && k.network.startsWith('eip155:') && k.extra.assetTransferMethod === 'permit2'
+      );
 
-      expect(v1Kinds.length).toBeGreaterThan(0);
-      v1Kinds.forEach((kind: any) => {
-        // A v1 client cannot send CAIP-2 back — its own spec doesn't allow it.
-        expect(kind.network).not.toContain(':');
-        expect(kind.network).toMatch(/^[a-z0-9-]+$/);
-      });
+      // The migration off insecure ERC-2612 dropped v1 EVM advertisement entirely.
+      expect(evmV1).toHaveLength(0);
+      expect(evmV2Permit2.length).toBeGreaterThan(0);
     });
 
-    it('should advertise every network under both a v1 and a v2 identifier', async () => {
+    it('should advertise Permit2 only for x402 v2 EVM clients', async () => {
       const response = await request(app).get('/supported');
       const v1Count = response.body.kinds.filter((k: any) => k.x402Version === 1).length;
       const v2Count = response.body.kinds.filter((k: any) => k.x402Version === 2).length;
 
-      expect(v1Count).toBe(v2Count);
+      const evmV1Count = response.body.kinds.filter((k: any) => k.x402Version === 1 && k.network.startsWith('eip155:')).length;
+      expect(evmV1Count).toBe(0);
+      expect(v2Count).toBeGreaterThan(v1Count);
     });
   });
 
@@ -220,7 +221,7 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
     it('should include extensions array', async () => {
       const response = await request(app).get('/supported');
 
-      expect(response.body.extensions).toEqual([]);
+      expect(response.body.extensions).toContain('eip2612GasSponsoring');
     });
 
     it('should include signers object', async () => {

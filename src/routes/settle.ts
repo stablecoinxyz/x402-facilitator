@@ -10,6 +10,7 @@ import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
 import { resolveEvmFacilitatorAddress } from './verify';
 import logger from '../lib/logger';
+import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
 
 /**
  * Solana settlements share one serialization queue. Unlike EVM there is no
@@ -37,16 +38,18 @@ function resolveSettlementMode(): SettlementMode {
 }
 
 /**
- * Payment Settlement Handler - x402 V2 with ERC-2612 Permit
+ * Payment Settlement Handler - x402 V2 Exact
  *
  * Executes on-chain transfers for multiple networks:
  *
  * - Solana: Delegated SPL token transfer (handled by solana/settle.ts)
  *   Facilitator executes transfer as delegate: Agent → Merchant
  *
- * - Base/Radius: ERC-2612 Permit + TransferFrom
- *   1. Facilitator calls permit(owner, spender, value, deadline, v, r, s)
- *   2. Facilitator calls transferFrom(owner, recipient, value)
+ * - Base/Radius: Permit2 via the canonical x402 proxy (official Exact EVM path).
+ *   The facilitator calls settle() / settleWithPermit() on the proxy, which
+ *   enforces the signed witness recipient. Legacy ERC-2612 EVM authorizations
+ *   are rejected; the permit() + transferFrom() code further down is currently
+ *   unreachable.
  *   Tokens flow: Payer → Merchant (facilitator never holds funds)
  *
  * All settlement methods maintain non-custodial properties - the facilitator
@@ -59,8 +62,12 @@ function parseEvmChainId(network: string): number | null {
   return match ? parseInt(match[1], 10) : null;
 }
 
+function sameEvmAddress(a: unknown, b: unknown): boolean {
+  return typeof a === 'string' && typeof b === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a) && a.toLowerCase() === b.toLowerCase();
+}
+
 /** Resolve CAIP-2 network string to chain config + credentials */
-function resolveEvmNetwork(network: string) {
+function resolveEvmNetwork(network: string): any {
   const chainId = parseEvmChainId(network);
   if (chainId === null) return null;
 
@@ -369,6 +376,81 @@ export async function settlePayment(req: Request, res: Response) {
       });
     }
 
+    // Standard x402 Exact EVM settlement: only Permit2 payloads are accepted.
+    // The canonical proxy enforces witness.to, so the facilitator cannot alter
+    // the recipient or amount after the payer has signed.
+    {
+    if (paymentPayload.accepted?.network !== paymentRequirements.network || paymentPayload.accepted?.amount !== paymentRequirements.amount || !sameEvmAddress(paymentPayload.accepted?.asset, paymentRequirements.asset) || !sameEvmAddress(paymentPayload.accepted?.payTo, paymentRequirements.payTo) || paymentPayload.accepted?.extra?.assetTransferMethod !== 'permit2' || paymentPayload.accepted?.extra?.name !== paymentRequirements.extra?.name || paymentPayload.accepted?.extra?.version !== paymentRequirements.extra?.version) {
+      settleTotal.inc({ network, result: 'failed' });
+      return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'invalid_payload' });
+    }
+    const parsedPermit2 = parsePermit2(paymentPayload.payload, paymentRequirements, paymentPayload.extensions);
+    if (!parsedPermit2.ok) {
+      settleTotal.inc({ network, result: 'failed' });
+      return res.json({ success: false, payer: parsedPermit2.payer, transaction: '', network, errorReason: parsedPermit2.reason });
+    }
+    const tokenConfigForPermit2 = resolveToken(networkConfig.chainId, parsedPermit2.auth.permitted.token);
+    if (!tokenConfigForPermit2) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
+    if (parsedPermit2.auth.from.toLowerCase() === parsedPermit2.auth.witness.to.toLowerCase()) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_self_payment' });
+    // Refuse before signature or RPC work when this instance is not permitted
+    // to settle. A disabled facilitator must never look like it made a payment.
+    const permit2Mode = resolveSettlementMode();
+    if (permit2Mode === 'disabled') return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'settlement_disabled' });
+    let permit2SignatureOk = false;
+    try { permit2SignatureOk = await verifyPermit2Signature(parsedPermit2.auth, parsedPermit2.signature, networkConfig.chainId); } catch { permit2SignatureOk = false; }
+    if (!permit2SignatureOk) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_exact_evm_payload_signature' });
+    if (parsedPermit2.sponsor) {
+      let sponsorSignatureOk = false;
+      try { sponsorSignatureOk = await verifySponsorSignature(parsedPermit2.sponsor, tokenConfigForPermit2.name, tokenConfigForPermit2.version, networkConfig.chainId); } catch { sponsorSignatureOk = false; }
+      if (!sponsorSignatureOk) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_exact_evm_payload_signature' });
+    }
+    if (permit2Mode === 'simulated') {
+      const previous = nonceTracker.getSettled(network, parsedPermit2.auth.from, parsedPermit2.auth.nonce);
+      if (previous?.simulated) {
+        res.set('X-Settlement-Mode', 'simulated');
+        return res.json({ success: true, payer: previous.payer, transaction: previous.txHash, network: previous.network });
+      }
+      const txHash = `SIMULATED${Math.random().toString(36).slice(2)}${Date.now()}`;
+      nonceTracker.markSettled(network, parsedPermit2.auth.from, parsedPermit2.auth.nonce, {
+        txHash, payer: parsedPermit2.auth.from, network, simulated: true,
+      });
+      res.set('X-Settlement-Mode', 'simulated');
+      return res.json({ success: true, payer: parsedPermit2.auth.from, transaction: txHash, network });
+    }
+    if (!networkConfig.privateKey) throw new Error(`Facilitator private key not configured for ${networkConfig.label}`);
+    const chain = { id: networkConfig.chainId, name: networkConfig.label, nativeCurrency: { decimals: 18, name: 'Native', symbol: 'NATIVE' }, rpcUrls: { default: { http: [networkConfig.rpcUrl] } } };
+    const account = privateKeyToAccount(networkConfig.privateKey as `0x${string}`);
+    const wallet = createWalletClient({ account, chain, transport: http(networkConfig.rpcUrl) });
+    const publicClient = createPublicClient({ chain, transport: http(networkConfig.rpcUrl) });
+    const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
+    const tokenCode = await publicClient.getCode({ address: parsedPermit2.auth.permitted.token as `0x${string}` });
+    if (!tokenCode || tokenCode === '0x') return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
+    const permit = { permitted: { token: parsedPermit2.auth.permitted.token as `0x${string}`, amount: BigInt(parsedPermit2.auth.permitted.amount) }, nonce: BigInt(parsedPermit2.auth.nonce), deadline: BigInt(parsedPermit2.auth.deadline) };
+    const witness = { to: parsedPermit2.auth.witness.to as `0x${string}`, validAfter: BigInt(parsedPermit2.auth.witness.validAfter) };
+    const args: any = parsedPermit2.sponsor ? [{ value: BigInt(parsedPermit2.sponsor.amount), deadline: BigInt(parsedPermit2.sponsor.deadline), r: `0x${parsedPermit2.sponsor.signature.slice(2, 66)}`, s: `0x${parsedPermit2.sponsor.signature.slice(66, 130)}`, v: parseInt(parsedPermit2.sponsor.signature.slice(130), 16) }, permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`] : [permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`];
+    const functionName: any = parsedPermit2.sponsor ? 'settleWithPermit' : 'settle';
+    const txHash = await settlementQueue.enqueue(account.address, async () => {
+      // Keep preflight and broadcast in one serialization boundary: otherwise
+      // concurrent duplicates can all preflight before Permit2 consumes its nonce.
+      if (!isRadius) await publicClient.simulateContract({ account: account.address, address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args });
+      const gasOverrides: { gasPrice?: bigint } = {};
+      if (isRadius) gasOverrides.gasPrice = (await publicClient.getGasPrice()) + 1000000000n;
+      const hash = await wallet.writeContract({ address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args, ...gasOverrides });
+      let receipt;
+      try { receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 }); }
+      catch (error: any) { error.broadcastHash = hash; error.settlementPending = true; throw error; }
+      if (receipt.status === 'reverted') {
+        const err: any = new Error('Permit2 settlement reverted');
+        err.broadcastHash = hash;
+        err.transactionReverted = true;
+        throw err;
+      }
+      return hash;
+    });
+    settleTotal.inc({ network, result: 'success' }); recordDuration(startTime, network);
+    return res.json({ success: true, payer: parsedPermit2.auth.from, transaction: txHash, network });
+    }
+
     log.debug({ network, label: networkConfig.label }, 'EVM settlement');
 
     // Extract v2 authorization + signature
@@ -411,7 +493,7 @@ export async function settlePayment(req: Request, res: Response) {
     }
 
     // Nonce replay protection — if already settled, return the original success response (idempotent)
-    const previousSettlement = nonceTracker.getSettled(network, owner, nonce);
+    const previousSettlement: any = nonceTracker.getSettled(network, owner, nonce);
     if (previousSettlement) {
       log.info({ payer: owner, network, nonce, txHash: previousSettlement.txHash }, 'Idempotent replay — returning original settlement');
       settleTotal.inc({ network, result: 'replay' });
@@ -561,7 +643,7 @@ export async function settlePayment(req: Request, res: Response) {
     // address ever drifted from its key, settle would reject payloads verify had
     // just accepted. Without this check the facilitator pays gas to grant an
     // attacker-chosen spender an allowance, and transferFrom then reverts.
-    const facilitatorAddress = resolveEvmFacilitatorAddress(network);
+    const facilitatorAddress: any = resolveEvmFacilitatorAddress(network);
     if (facilitatorAddress && spender.toLowerCase() !== facilitatorAddress.toLowerCase()) {
       log.warn(
         { payer: owner, network, spender, expected: facilitatorAddress, errorReason: 'invalid_exact_evm_payload_recipient_mismatch' },
@@ -852,7 +934,7 @@ export async function settlePayment(req: Request, res: Response) {
     // Try to extract payer and network from request if possible
     let payer = 'unknown';
     try {
-      payer = req.body.paymentPayload?.payload?.authorization?.from || 'unknown';
+      payer = req.body.paymentPayload?.payload?.permit2Authorization?.from || req.body.paymentPayload?.payload?.authorization?.from || 'unknown';
       const rawNetwork = req.body.paymentPayload?.accepted?.network;
       if (rawNetwork) network = toCaip2Network(rawNetwork);
     } catch {}

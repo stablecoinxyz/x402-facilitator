@@ -5,14 +5,17 @@ import { config, resolveToken, toCaip2Network } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
+import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, PERMIT2_ADDRESS } from '../evm/permit2';
 
 /**
- * Payment Verification Handler - x402 V2 with ERC-2612 Permit
+ * Payment Verification Handler - x402 V2 Exact
  *
  * Verifies payment authorizations for multiple networks:
  *
  * - Solana: Ed25519 signature verification (handled by solana/verify.ts)
- * - Base/Radius: ERC-2612 Permit signature verification
+ * - Base/Radius: Permit2 witness verification (official Exact EVM path). Legacy
+ *   ERC-2612 EVM authorizations are rejected; the ERC-2612 code further down is
+ *   currently unreachable.
  */
 
 // ERC-2612 Permit EIP-712 Types
@@ -32,8 +35,12 @@ function parseEvmChainId(network: string): number | null {
   return match ? parseInt(match[1], 10) : null;
 }
 
+function sameEvmAddress(a: unknown, b: unknown): boolean {
+  return typeof a === 'string' && typeof b === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a) && a.toLowerCase() === b.toLowerCase();
+}
+
 /** Resolve CAIP-2 network string to chain config from environment */
-function resolveEvmNetwork(network: string) {
+function resolveEvmNetwork(network: string): any {
   const chainId = parseEvmChainId(network);
   if (chainId === null) return null;
 
@@ -258,6 +265,82 @@ export async function verifyPayment(req: Request, res: Response) {
       });
     }
 
+    // Official x402 Exact EVM Permit2 path. Legacy ERC-2612 payloads are not
+    // accepted: an ERC-2612 allowance does not bind the payment recipient.
+    {
+    if (paymentPayload.accepted?.network !== paymentRequirements.network || paymentPayload.accepted?.amount !== paymentRequirements.amount || !sameEvmAddress(paymentPayload.accepted?.asset, paymentRequirements.asset) || !sameEvmAddress(paymentPayload.accepted?.payTo, paymentRequirements.payTo) || paymentPayload.accepted?.extra?.assetTransferMethod !== 'permit2' || paymentPayload.accepted?.extra?.name !== paymentRequirements.extra?.name || paymentPayload.accepted?.extra?.version !== paymentRequirements.extra?.version) {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: 'unknown', invalidReason: 'invalid_payload' });
+    }
+    const parsedPermit2 = parsePermit2(paymentPayload.payload, paymentRequirements, paymentPayload.extensions);
+    if (!parsedPermit2.ok) {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: parsedPermit2.payer, invalidReason: parsedPermit2.reason });
+    }
+    const tokenConfigForPermit2 = resolveToken(networkConfig.chainId, parsedPermit2.auth.permitted.token);
+    if (!tokenConfigForPermit2) {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'unsupported_asset' });
+    }
+    if (parsedPermit2.auth.from.toLowerCase() === parsedPermit2.auth.witness.to.toLowerCase()) {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'invalid_self_payment' });
+    }
+    let permit2SignatureOk = false;
+    try { permit2SignatureOk = await verifyPermit2Signature(parsedPermit2.auth, parsedPermit2.signature, networkConfig.chainId); }
+    catch { permit2SignatureOk = false; }
+    if (!permit2SignatureOk) {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'invalid_exact_evm_payload_signature' });
+    }
+    if (parsedPermit2.sponsor) {
+      let sponsorOk = false;
+      try { sponsorOk = await verifySponsorSignature(parsedPermit2.sponsor, tokenConfigForPermit2.name, tokenConfigForPermit2.version, networkConfig.chainId); }
+      catch { sponsorOk = false; }
+      if (!sponsorOk) {
+        verifyTotal.inc({ network, result: 'invalid' });
+        return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'invalid_exact_evm_payload_signature' });
+      }
+    }
+    const permit2Client = createPublicClient({ chain: { id: networkConfig.chainId, name: networkConfig.label, nativeCurrency: { decimals: 18, name: 'Native', symbol: 'NATIVE' }, rpcUrls: { default: { http: [networkConfig.rpcUrl] } } }, transport: http(networkConfig.rpcUrl) });
+    // A configured asset must be a contract. Calling ERC-20-shaped methods on
+    // an EOA can return empty success data and make a misconfiguration look
+    // like a payment; reject it before balance/allowance checks.
+    const tokenCode = await permit2Client.getCode({ address: parsedPermit2.auth.permitted.token as `0x${string}` });
+    if (!tokenCode || tokenCode === '0x') {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'unsupported_asset' });
+    }
+    const erc20Abi = [{ type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }] }, { type: 'function', name: 'allowance', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }], outputs: [{ type: 'uint256' }] }] as const;
+    const [balance, allowance] = await Promise.all([
+      permit2Client.readContract({ address: parsedPermit2.auth.permitted.token as `0x${string}`, abi: erc20Abi, functionName: 'balanceOf', args: [parsedPermit2.auth.from as `0x${string}`] }),
+      permit2Client.readContract({ address: parsedPermit2.auth.permitted.token as `0x${string}`, abi: erc20Abi, functionName: 'allowance', args: [parsedPermit2.auth.from as `0x${string}`, PERMIT2_ADDRESS] }),
+    ]);
+    if (parsedPermit2.sponsor) {
+      try {
+        const currentNonce = await permit2Client.readContract({ address: parsedPermit2.auth.permitted.token as `0x${string}`, abi: [{ type: 'function', name: 'nonces', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] }] as const, functionName: 'nonces', args: [parsedPermit2.auth.from as `0x${string}`] });
+        if (currentNonce !== BigInt(parsedPermit2.sponsor.nonce)) {
+          verifyTotal.inc({ network, result: 'invalid' });
+          return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'invalid_exact_evm_payload_signature' });
+        }
+      } catch {
+        verifyTotal.inc({ network, result: 'invalid' });
+        return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'invalid_payload' });
+      }
+    }
+    if (balance < BigInt(parsedPermit2.auth.permitted.amount)) {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'insufficient_funds' });
+    }
+    if (allowance < BigInt(parsedPermit2.auth.permitted.amount) && !parsedPermit2.sponsor) {
+      verifyTotal.inc({ network, result: 'invalid' });
+      return res.status(412).json({ isValid: false, payer: parsedPermit2.auth.from, invalidReason: 'PERMIT2_ALLOWANCE_REQUIRED' });
+    }
+    verifyTotal.inc({ network, result: 'valid' });
+    recordDuration(startTime, network);
+    return res.json({ isValid: true, payer: parsedPermit2.auth.from, invalidReason: null, remainingSeconds: Number(BigInt(parsedPermit2.auth.deadline) - BigInt(Math.floor(Date.now() / 1000))) });
+    }
+
     log.debug({ network, label: networkConfig.label }, 'EVM payment detected');
 
     // Extract v2 authorization data
@@ -398,7 +481,7 @@ export async function verifyPayment(req: Request, res: Response) {
     log.debug('Amount sufficient');
 
     // Check spender matches our facilitator address (spec step 5)
-    const facilitatorAddress = resolveEvmFacilitatorAddress(network);
+    const facilitatorAddress: any = resolveEvmFacilitatorAddress(network);
     if (facilitatorAddress && spender.toLowerCase() !== facilitatorAddress.toLowerCase()) {
       log.warn({ payer: owner, network, errorReason: 'invalid_exact_evm_payload_recipient_mismatch' }, 'Spender does not match facilitator');
       verifyTotal.inc({ network, result: 'invalid' });
@@ -480,7 +563,7 @@ export async function verifyPayment(req: Request, res: Response) {
     // Try to extract payer from request if possible
     let payer = 'unknown';
     try {
-      payer = req.body.paymentPayload?.payload?.authorization?.from || 'unknown';
+      payer = req.body.paymentPayload?.payload?.permit2Authorization?.from || req.body.paymentPayload?.payload?.authorization?.from || 'unknown';
     } catch {}
 
     const msg = error?.message || '';

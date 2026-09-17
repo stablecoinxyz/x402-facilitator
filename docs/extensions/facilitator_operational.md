@@ -32,7 +32,7 @@ When `/verify` returns `isValid: true`, the facilitator MAY include a `remaining
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `remainingSeconds` | `number` | No | Seconds until the authorization expires (`validBefore - now` for EVM, `deadline - now` for Solana) |
+| `remainingSeconds` | `number` | No | Seconds until the authorization's `deadline` (`deadline - now`) |
 
 **Client behavior:** Resource servers SHOULD use this value to choose a settlement strategy:
 - If `remainingSeconds` exceeds the expected job duration plus a safety margin, settle after completion
@@ -48,8 +48,8 @@ Between `/verify` and `/settle`, time passes. If the authorization expires in th
 
 Before broadcasting a settlement transaction, the facilitator SHOULD check:
 
-1. If `now > validBefore`: reject with `errorReason: "permit_expired"`
-2. If `validBefore - now < SAFETY_MARGIN` (recommended: 30 seconds): reject with `errorReason: "permit_expired"`
+1. If `now > deadline`: reject with `errorReason: "permit_expired"`
+2. If `deadline - now < SAFETY_MARGIN` (recommended: 30 seconds): reject with `errorReason: "permit_expired"`
 
 The safety margin accounts for transaction propagation and block confirmation time.
 
@@ -109,7 +109,7 @@ If estimation reverts, the facilitator SHOULD return:
 
 ### Motivation
 
-On-chain, ERC-2612/EIP-3009 nonce protection prevents double-spend. But without server-side dedup, the facilitator submits a transaction, pays gas, and discovers the nonce is consumed only after the revert.
+On-chain, ERC-2612/EIP-3009/Permit2 nonce protection prevents double-spend. But without server-side dedup, the facilitator submits a transaction, pays gas, and discovers the nonce is consumed only after the revert.
 
 ### Specification
 
@@ -156,6 +156,18 @@ Before settlement:
 ## Reference Implementation
 
 - **SBC x402 Facilitator** — https://x402.stablecoin.xyz
-- 187 unit tests including security exploit coverage
-- 36/36 v2 conformance checks
-- 5 networks: Base, Base Sepolia, Radius, Radius Testnet, Solana
+- Unit tests including security exploit coverage (`npm test`)
+- Networks: Base, Base Sepolia, Radius, Radius Testnet, Solana
+
+The `npm run conformance` harness (`src/__tests__/conformance.ts`) still builds legacy ERC-2612 EVM payloads and is pending migration to the Permit2 Exact EVM scheme, so it does not yet reflect current EVM behavior.
+
+### Implementation status (SBC reference, after the Permit2 Exact EVM migration)
+
+The proposal text above is normative and version-independent. Where the SBC EVM path now diverges from it:
+
+| Section | Proposal | SBC reference today |
+| --- | --- | --- |
+| §1 Deadline-aware verify | `remainingSeconds` on `isValid: true` | Implemented, computed as `deadline - now` from the Permit2 authorization |
+| §2 Pre-settle deadline check | Reject within a 30s `SAFETY_MARGIN` with `permit_expired` | Rejects `now > deadline` (and `now < witness.validAfter`) before any chain work, returning `invalid_exact_evm_payload_authorization_valid_before` / `_valid_after`; no 30s margin and no `permit_expired` code |
+| §3 Gas estimation | `estimateContractGas`, error `gas_estimation_failed` | Uses `simulateContract` against the canonical proxy immediately before broadcast, skipped on Radius; on-chain revert categories are surfaced instead of a `gas_estimation_failed` code |
+| §4 Server-side nonce dedup | In-memory nonce set, error `nonce_already_settled` | Applied on Solana and simulated EVM only; live EVM Permit2 relies on the on-chain Permit2 nonce plus the per-wallet queue |

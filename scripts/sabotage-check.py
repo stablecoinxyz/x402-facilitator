@@ -41,7 +41,7 @@ MUTATIONS = [
         "src/routes/settle.ts",
         "        transaction: error.broadcastHash,\n        network,\n        errorReason: 'settlement_pending',",
         "        transaction: '',\n        network,\n        errorReason: 'settlement_pending',",
-        ["src/__tests__/settle-receipt-lost.spec.ts"],
+        ["src/__tests__/permit2-settle.spec.ts"],
     ),
     (
         "replay keyed on the client-chosen nonce, not the signature",
@@ -53,9 +53,9 @@ MUTATIONS = [
     (
         "a reverted transfer receipt treated as success",
         "src/routes/settle.ts",
-        "        if (receipt.status === 'reverted') {",
-        "        if ((false as boolean)) {",
-        ["src/__tests__/settle-receipt-lost.spec.ts", "-t", "reverted"],
+        "      if (receipt.status === 'reverted') {\n        const err: any = new Error('Permit2 settlement reverted');",
+        "      if ((false as boolean)) {\n        const err: any = new Error('Permit2 settlement reverted');",
+        ["src/__tests__/permit2-settle.spec.ts", "-t", "reverted"],
     ),
     (
         "Solana ignores the settlement kill switch",

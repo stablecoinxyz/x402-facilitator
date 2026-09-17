@@ -22,37 +22,37 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // v2 advertises CAIP-2; v1 advertises the plain name, because that is what a v1
   // client will send back in paymentRequirements.network. Advertising CAIP-2 on a
   // v1 kind gives the client an identifier its own spec doesn't allow it to use.
-  function addKind(network: string, extra: { assetTransferMethod: string; name: string; version: string }) {
+  function addKind(network: string, extra: { assetTransferMethod: string; name: string; version: string }, includeV1 = true) {
     kinds.push({ x402Version: 2, scheme: 'exact', network, extra });
     const v1Name = toV1Network(network);
-    if (v1Name) {
+    if (includeV1 && v1Name) {
       kinds.push({ x402Version: 1, scheme: 'exact', network: v1Name, extra });
     }
   }
 
   // Add Base Mainnet if configured
   if (config.baseFacilitatorAddress && config.baseFacilitatorPrivateKey) {
-    addKind('eip155:8453', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
-    addKind('eip155:8453', { assetTransferMethod: 'erc2612', name: 'USD Coin', version: '2' });
+    addKind('eip155:8453', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
+    addKind('eip155:8453', { assetTransferMethod: 'permit2', name: 'USD Coin', version: '2' }, false);
     addSigner(signers, 'eip155:*', config.baseFacilitatorAddress);
   }
 
   // Add Base Sepolia if configured
   if (config.baseSepoliaFacilitatorAddress && config.baseSepoliaFacilitatorPrivateKey) {
-    addKind('eip155:84532', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
-    addKind('eip155:84532', { assetTransferMethod: 'erc2612', name: 'USD Coin', version: '2' });
+    addKind('eip155:84532', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
+    addKind('eip155:84532', { assetTransferMethod: 'permit2', name: 'USD Coin', version: '2' }, false);
     addSigner(signers, 'eip155:*', config.baseSepoliaFacilitatorAddress);
   }
 
   // Add Radius Mainnet if configured
   if (config.radiusFacilitatorAddress && config.radiusFacilitatorPrivateKey) {
-    addKind('eip155:723487', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
+    addKind('eip155:723487', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
     addSigner(signers, 'eip155:*', config.radiusFacilitatorAddress);
   }
 
   // Add Radius Testnet if configured
   if (config.radiusTestnetFacilitatorAddress && config.radiusTestnetFacilitatorPrivateKey) {
-    addKind('eip155:72344', { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' });
+    addKind('eip155:72344', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
     addSigner(signers, 'eip155:*', config.radiusTestnetFacilitatorAddress);
   }
 
@@ -62,7 +62,10 @@ export function getSupportedNetworks(req: Request, res: Response) {
     addSigner(signers, 'solana:*', config.solanaFacilitatorAddress);
   }
 
-  const data = { kinds, extensions: [], signers };
+  // SupportedResponse advertises extension identifiers. The extension's schema
+  // and client data live in the PaymentRequired/PAYMENT-SIGNATURE envelopes.
+  const hasEvm = Object.keys(signers).some(k => k === 'eip155:*');
+  const data = { kinds, extensions: hasEvm ? ['eip2612GasSponsoring'] : [], signers };
 
   // If browser, render HTML; otherwise return JSON for machines
   const accept = req.headers.accept || '';

@@ -130,11 +130,13 @@ That is normal and does not mean logs are being discarded.
 | Result | Meaning | Severity |
 |--------|---------|----------|
 | `success` | Settlement completed on-chain | OK |
-| `failed` | Known failure (gas estimation, bad payload, unknown network) | Expected |
-| `expired` | Permit deadline passed or within 30s safety margin | Expected |
-| `replay` | Nonce already settled (duplicate request) | Expected |
+| `failed` | Known bad input (malformed or non-Permit2 payload, unsupported network) | Expected |
+| `settlement_pending` | Broadcast succeeded but the receipt could not be read. Carries the tx hash — reconcile on chain. Pages (money may have moved) | Investigate |
+| `settlement_disabled` | Neither `ENABLE_REAL_SETTLEMENT` nor `ALLOW_SIMULATED_SETTLEMENT` is set — a misconfigured deploy refusing every settle. Pages | Investigate |
+| `expired` | Legacy label. No live path emits it — an expired EVM Permit2 authorization is rejected and counted under `failed` (`invalid_exact_evm_payload_authorization_valid_before`). Only the removed ERC-2612 EVM settle path set this label | Legacy |
+| `replay` | Nonce already settled (duplicate request). Emitted on Solana and simulated EVM only; live EVM Permit2 relies on the on-chain Permit2 nonce | Expected |
 | `bad_request` | Missing paymentPayload | Client error |
-| `insufficient_allowance` | permit() succeeded but transferFrom sees no allowance | Investigate |
+| `insufficient_allowance` | Token allowance insufficient at transfer time | Investigate |
 | `nonce_conflict` | Tx nonce collision (concurrent settlements) | Investigate |
 | `gas_error` | Insufficient gas or gas price too low | Investigate |
 | `invalid_signature` | ECDSA signature invalid on-chain | Client error |
@@ -189,21 +191,21 @@ Re-import `dashboard.json` — Grafana detects matching UID and offers to overwr
 
 ## Alert Rules
 
-See `alerts.yaml` for PromQL expressions. To create in Grafana:
+`alerts.yaml` is a **snapshot regenerated from the live Grafana rules** (curl command in its header) — the live rules are the source of truth, so change them in Grafana and re-export rather than hand-editing the file. The table below mirrors that snapshot.
 
-1. **Alerts & IRM** → **Alert rules** → **+ New alert rule**
-2. Set datasource to `grafanacloud-sbclogs-prom`
-3. Paste the PromQL from `alerts.yaml`
-4. Set evaluation interval, `for` duration, and contact point
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| Facilitator unreachable | Critical | `/metrics` unreachable (`up < 1`) for 5min |
+| Settle faults on our side | Critical | 2+ facilitator-fault settle results (`rpc_error`/`receipt_timeout`/`settlement_pending`/`nonce_conflict`/`gas_error`/`insufficient_allowance`/`tx_reverted`/`unknown`/`settlement_disabled`) in 15min |
+| Verify faults on our side | Critical | 3+ facilitator-fault verify results (`rpc_error`/`rpc_reverted`/`unknown`) in 15min |
+| Facilitator restart loop | Warning | 4+ process restarts in 30min |
+| Nonce conflicts detected | Warning | Any `nonce_conflict` settle in 15min |
+| Settle latency p95 high | Warning | p95 settle latency > 60s over 30min |
+| Client error volume elevated | Info | 20+ client-side settle rejections (`bad_request`/`expired`/`invalid_signature`/`failed`) in 1h |
+| Permit expired attempts (dashboard only) | Info | 10+ `expired`-result attempts in 1h — legacy label no live path emits |
+| Settlement succeeded | Info | Any successful settle in 1h |
 
-| Alert | Fires when | Severity |
-|-------|-----------|----------|
-| Settle failure rate high | Non-success rate > 10% for 5min | Critical |
-| RPC errors spiking | 3+ RPC failures in 5min | Critical |
-| Nonce conflicts detected | Any nonce collision | Warning |
-| Permit expired attempts | Any expired permit settle | Warning |
-| Signature errors spiking | 3+ invalid signatures in 5min | Warning |
-| Health check down | No facilitator logs for 10min | Critical |
+To reconstruct a rule in Grafana from the snapshot: **Alerts & IRM** → **Alert rules** → **+ New alert rule**, datasource `grafanacloud-sbclogs-prom`, paste the PromQL and set the `for` duration and contact point from `alerts.yaml`.
 
 ## Setup from Scratch
 
@@ -234,7 +236,7 @@ fly deploy
 
 ### 4. Grafana
 1. Import `dashboard.json`
-2. Create alert rules from `alerts.yaml`
+2. Recreate the alert rules from the `alerts.yaml` snapshot (the live Grafana rules are the source; re-export after changing them)
 
 ## Env Vars (on facilitator)
 
