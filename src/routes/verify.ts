@@ -76,8 +76,10 @@ function resolveEvmNetwork(network: string) {
   return null;
 }
 
-/** Resolve facilitator address for a given CAIP-2 EVM network */
-function resolveEvmFacilitatorAddress(network: string): string | null {
+/** Resolve facilitator address for a given CAIP-2 EVM network.
+ *  Exported so /settle enforces spender against the SAME address /verify does —
+ *  if the two resolved it differently, a payload could pass one and fail the other. */
+export function resolveEvmFacilitatorAddress(network: string): string | null {
   const chainId = parseEvmChainId(network);
   if (chainId === null) return null;
   if (chainId === config.baseChainId) return config.baseFacilitatorAddress;
