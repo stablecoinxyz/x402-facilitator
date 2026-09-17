@@ -8,6 +8,7 @@ import { verifySolanaPayment } from '../solana/verify';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
+import { resolveEvmFacilitatorAddress } from './verify';
 import logger from '../lib/logger';
 
 /**
@@ -505,6 +506,79 @@ export async function settlePayment(req: Request, res: Response) {
 
     // Create facilitator account
     const account = privateKeyToAccount(networkConfig.privateKey as `0x${string}`);
+
+    // --- Authorization constraints (x402 spec steps 3-5) ---------------------
+    // /settle cannot lean on /verify. The spec defines flows (upfront, escrow)
+    // where /verify never runs, and even in the default flow the two are separate
+    // unauthenticated requests with nothing linking them — the same reasoning the
+    // Solana branch above acts on by calling verifySolanaPayment() inline.
+    // Until 2026-09-17 this branch re-checked only the signature and the deadline,
+    // so a permit authorizing 1 base unit settled successfully against any
+    // requirement and returned success:true. The settle response carries no amount,
+    // so a resource server could not detect the underpayment without reading the
+    // chain. Reported externally; see security-triage#16.
+    // These mirror verify.ts steps 3-5 and MUST stay in sync with it.
+
+    // Step 3 — the authorized value must cover what the requirement asks for.
+    if (BigInt(value) < BigInt(paymentRequirements.amount)) {
+      log.warn(
+        { payer: owner, network, value, required: paymentRequirements.amount, errorReason: 'invalid_exact_evm_payload_authorization_value_mismatch' },
+        'Insufficient amount'
+      );
+      settleTotal.inc({ network, result: 'failed' });
+      recordDuration(startTime, network);
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'invalid_exact_evm_payload_authorization_value_mismatch',
+      });
+    }
+
+    // Step 4 — reject a permit whose activation time has not arrived. The deadline
+    // (validBefore) is checked above; validAfter was not checked at all.
+    const validAfterNum = Number(authorization.validAfter || '0');
+    if (now < validAfterNum) {
+      log.warn(
+        { payer: owner, network, validAfter: validAfterNum, errorReason: 'invalid_exact_evm_payload_authorization_valid_after' },
+        'Permit not yet valid'
+      );
+      settleTotal.inc({ network, result: 'failed' });
+      recordDuration(startTime, network);
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'invalid_exact_evm_payload_authorization_valid_after',
+      });
+    }
+
+    // Step 5 — the permit must name THIS facilitator as spender. Resolved through
+    // verify.ts's own helper so both endpoints agree; deliberately NOT compared
+    // against the signing key's address, because if a deployment's configured
+    // address ever drifted from its key, settle would reject payloads verify had
+    // just accepted. Without this check the facilitator pays gas to grant an
+    // attacker-chosen spender an allowance, and transferFrom then reverts.
+    const facilitatorAddress = resolveEvmFacilitatorAddress(network);
+    if (facilitatorAddress && spender.toLowerCase() !== facilitatorAddress.toLowerCase()) {
+      log.warn(
+        { payer: owner, network, spender, expected: facilitatorAddress, errorReason: 'invalid_exact_evm_payload_recipient_mismatch' },
+        'Spender does not match facilitator'
+      );
+      settleTotal.inc({ network, result: 'failed' });
+      recordDuration(startTime, network);
+      return res.json({
+        success: false,
+        payer: owner,
+        transaction: '',
+        network,
+        errorReason: 'invalid_exact_evm_payload_recipient_mismatch',
+      });
+    }
+
+    log.debug({ payer: owner, network }, 'Authorization constraints OK (value, validAfter, spender)');
 
     // Create wallet client
     const walletClient = createWalletClient({
