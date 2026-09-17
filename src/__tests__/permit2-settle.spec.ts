@@ -57,4 +57,12 @@ describe('Permit2 proxy settlement', () => {
     });
     expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: HASH });
   });
+
+  it('reports a mined-but-reverted settlement as invalid_transaction_state, carrying the hash', async () => {
+    waitForTransactionReceipt.mockResolvedValueOnce({ status: 'reverted' });
+    const response = await request(app()).post('/settle').send({
+      paymentPayload: createBasePayment(), paymentRequirements: createPaymentRequirements('eip155:8453'),
+    });
+    expect(response.body).toMatchObject({ success: false, errorReason: 'invalid_transaction_state', transaction: HASH });
+  });
 });

@@ -437,7 +437,12 @@ export async function settlePayment(req: Request, res: Response) {
       let receipt;
       try { receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 }); }
       catch (error: any) { error.broadcastHash = hash; error.settlementPending = true; throw error; }
-      if (receipt.status === 'reverted') throw new Error('Permit2 settlement reverted');
+      if (receipt.status === 'reverted') {
+        const err: any = new Error('Permit2 settlement reverted');
+        err.broadcastHash = hash;
+        err.transactionReverted = true;
+        throw err;
+      }
       return hash;
     });
     settleTotal.inc({ network, result: 'success' }); recordDuration(startTime, network);
