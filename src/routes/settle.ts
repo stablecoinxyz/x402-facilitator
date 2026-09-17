@@ -420,6 +420,7 @@ export async function settlePayment(req: Request, res: Response) {
     const account = privateKeyToAccount(networkConfig.privateKey as `0x${string}`);
     const wallet = createWalletClient({ account, chain, transport: http(networkConfig.rpcUrl) });
     const publicClient = createPublicClient({ chain, transport: http(networkConfig.rpcUrl) });
+    const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
     const tokenCode = await publicClient.getCode({ address: parsedPermit2.auth.permitted.token as `0x${string}` });
     if (!tokenCode || tokenCode === '0x') return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
     const permit = { permitted: { token: parsedPermit2.auth.permitted.token as `0x${string}`, amount: BigInt(parsedPermit2.auth.permitted.amount) }, nonce: BigInt(parsedPermit2.auth.nonce), deadline: BigInt(parsedPermit2.auth.deadline) };
@@ -430,7 +431,9 @@ export async function settlePayment(req: Request, res: Response) {
       // Keep preflight and broadcast in one serialization boundary: otherwise
       // concurrent duplicates can all preflight before Permit2 consumes its nonce.
       await publicClient.simulateContract({ account: account.address, address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args });
-      const hash = await wallet.writeContract({ address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args });
+      const gasOverrides: { gasPrice?: bigint } = {};
+      if (isRadius) gasOverrides.gasPrice = (await publicClient.getGasPrice()) + 1000000000n;
+      const hash = await wallet.writeContract({ address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args, ...gasOverrides });
       let receipt;
       try { receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 }); }
       catch (error: any) { error.broadcastHash = hash; error.settlementPending = true; throw error; }
