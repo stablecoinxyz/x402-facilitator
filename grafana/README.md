@@ -130,9 +130,9 @@ That is normal and does not mean logs are being discarded.
 | Result | Meaning | Severity |
 |--------|---------|----------|
 | `success` | Settlement completed on-chain | OK |
-| `failed` | Known failure (gas estimation, bad payload, unknown network) | Expected |
-| `expired` | Authorization deadline passed before settlement | Expected |
-| `replay` | Nonce already settled (duplicate request) | Expected |
+| `failed` | Known bad input (malformed or non-Permit2 payload, unsupported network) | Expected |
+| `expired` | Legacy label. No live path emits it — an expired EVM Permit2 authorization is rejected and counted under `failed` (`invalid_exact_evm_payload_authorization_valid_before`). Only the removed ERC-2612 EVM settle path set this label | Legacy |
+| `replay` | Nonce already settled (duplicate request). Emitted on Solana and simulated EVM only; live EVM Permit2 relies on the on-chain Permit2 nonce | Expected |
 | `bad_request` | Missing paymentPayload | Client error |
 | `insufficient_allowance` | Token allowance insufficient at transfer time | Investigate |
 | `nonce_conflict` | Tx nonce collision (concurrent settlements) | Investigate |

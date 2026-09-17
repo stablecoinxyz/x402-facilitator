@@ -4,9 +4,9 @@
 
 **Spec:** [x402 Foundation Exact EVM scheme](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md)
 
-**Last verified:** 2026-09-17
+**Last verified:** unit suite green 2026-09-17 (`npm test`). The `npm run conformance` harness has not been re-run since the Permit2 migration.
 
-**Result:** all conformance checks passed ✓ | unit suite green ✓
+**Result:** unit suite green ✓. `npm run conformance` (`src/__tests__/conformance.ts`) still builds legacy ERC-2612 EVM payloads, which this facilitator now rejects, so it must be updated to the Permit2 Exact EVM scheme before it reflects the current EVM behavior. The check tables below were verified against the spec and the settlement code, not by a fresh conformance run.
 
 Run them yourself rather than trusting a number here — counts go stale the moment
 a check or a test is added, and both have been:

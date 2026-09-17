@@ -32,7 +32,7 @@ When `/verify` returns `isValid: true`, the facilitator MAY include a `remaining
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `remainingSeconds` | `number` | No | Seconds until the authorization expires (`validBefore - now` for EVM, `deadline - now` for Solana) |
+| `remainingSeconds` | `number` | No | Seconds until the authorization's `deadline` (`deadline - now`) |
 
 **Client behavior:** Resource servers SHOULD use this value to choose a settlement strategy:
 - If `remainingSeconds` exceeds the expected job duration plus a safety margin, settle after completion
@@ -48,8 +48,8 @@ Between `/verify` and `/settle`, time passes. If the authorization expires in th
 
 Before broadcasting a settlement transaction, the facilitator SHOULD check:
 
-1. If `now > validBefore`: reject with `errorReason: "permit_expired"`
-2. If `validBefore - now < SAFETY_MARGIN` (recommended: 30 seconds): reject with `errorReason: "permit_expired"`
+1. If `now > deadline`: reject with `errorReason: "permit_expired"`
+2. If `deadline - now < SAFETY_MARGIN` (recommended: 30 seconds): reject with `errorReason: "permit_expired"`
 
 The safety margin accounts for transaction propagation and block confirmation time.
 
@@ -109,7 +109,7 @@ If estimation reverts, the facilitator SHOULD return:
 
 ### Motivation
 
-On-chain, ERC-2612/EIP-3009 nonce protection prevents double-spend. But without server-side dedup, the facilitator submits a transaction, pays gas, and discovers the nonce is consumed only after the revert.
+On-chain, ERC-2612/EIP-3009/Permit2 nonce protection prevents double-spend. But without server-side dedup, the facilitator submits a transaction, pays gas, and discovers the nonce is consumed only after the revert.
 
 ### Specification
 
