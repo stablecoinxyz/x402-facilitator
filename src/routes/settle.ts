@@ -430,7 +430,7 @@ export async function settlePayment(req: Request, res: Response) {
     const txHash = await settlementQueue.enqueue(account.address, async () => {
       // Keep preflight and broadcast in one serialization boundary: otherwise
       // concurrent duplicates can all preflight before Permit2 consumes its nonce.
-      await publicClient.simulateContract({ account: account.address, address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args });
+      if (!isRadius) await publicClient.simulateContract({ account: account.address, address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args });
       const gasOverrides: { gasPrice?: bigint } = {};
       if (isRadius) gasOverrides.gasPrice = (await publicClient.getGasPrice()) + 1000000000n;
       const hash = await wallet.writeContract({ address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args, ...gasOverrides });
