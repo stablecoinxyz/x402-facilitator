@@ -562,7 +562,7 @@ describe('POST /verify - x402 V2 Spec Compliance', () => {
       expect(response.body.payer).toBe('not_an_address');
     });
 
-    it.skip('should handle address with wrong length', async () => {
+    it('should handle address with wrong length', async () => {
       const paymentPayload = createBasePayment();
       paymentPayload.payload.authorization.from = '0x1234'; // Too short
       const paymentRequirements = createPaymentRequirements('eip155:8453');
