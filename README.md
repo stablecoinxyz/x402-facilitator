@@ -2,7 +2,7 @@
 
 SBC x402 Facilitator — verifies and settles payments using the [x402 protocol](https://github.com/coinbase/x402) (v2).
 
-Uses ERC-2612 Permit for EVM chains (SBC token doesn't support EIP-3009) and delegated SPL transfers for Solana. The facilitator never holds customer funds.
+Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 support is used only by the optional `eip2612GasSponsoring` extension to establish Permit2 allowance; the Permit2 witness and canonical x402 proxy bind the payment recipient and amount. Solana uses delegated SPL transfers.
 
 **[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — conformant, verify with `npm run conformance` | **[Observability →](./grafana/README.md)**
 
@@ -10,10 +10,10 @@ Uses ERC-2612 Permit for EVM chains (SBC token doesn't support EIP-3009) and del
 
 | Network | CAIP-2 ID | Env Prefix | Mechanism |
 |---------|-----------|-----------|-----------|
-| Base | `eip155:8453` | `BASE_` | ERC-2612 Permit + TransferFrom |
-| Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | ERC-2612 Permit + TransferFrom |
-| Radius | `eip155:723487` | `RADIUS_` | ERC-2612 Permit + TransferFrom |
-| Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | ERC-2612 Permit + TransferFrom |
+| Base | `eip155:8453` | `BASE_` | Permit2 + canonical x402 proxy |
+| Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | Permit2 + canonical x402 proxy |
+| Radius | `eip155:723487` | `RADIUS_` | Permit2 + canonical x402 proxy |
+| Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | Permit2 + canonical x402 proxy |
 | Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | `SOLANA_` | Delegated SPL token transfer |
 
 Each network has its own env vars — mainnets and testnets can be configured simultaneously.
@@ -75,7 +75,7 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
     "asset": "0x...",
     "payTo": "0x...",
     "maxTimeoutSeconds": 60,
-    "extra": { "assetTransferMethod": "erc2612", "name": "Stable Coin", "version": "1" }
+    "extra": { "assetTransferMethod": "permit2", "name": "Stable Coin", "version": "1" }
   }
 }
 ```
@@ -120,7 +120,7 @@ To run against a deployed facilitator instead of a local server:
 FACILITATOR_URL=https://x402.stablecoin.xyz npm run demo -- --network radius-testnet
 ```
 
-The demo client signs an ERC-2612 Permit off-chain (no gas), then the facilitator calls `permit()` + `transferFrom()` on-chain to move SBC from Client → Merchant. The client wallet needs SBC; the facilitator only needs ETH for gas.
+For SBC, clients sign a Permit2 payment witness. They either approve Permit2 once on-chain or include the standard `eip2612GasSponsoring` extension, which lets the canonical x402 proxy submit an SBC ERC-2612 approval and settle atomically. The witness binds the merchant recipient and exact amount.
 
 ## Observability
 
@@ -198,7 +198,7 @@ See [`grafana/alerts.yaml`](./grafana/alerts.yaml) for full PromQL expressions.
 
 ```bash
 npm run dev           # watch mode (auto-restart)
-npm test              # run tests (187 tests)
+npm test              # run the test suite
 npm run build         # compile TypeScript
 npm start             # production
 fly deploy            # deploy to Fly.io

@@ -52,7 +52,7 @@ describe('POST /settle - malformed signature guard', () => {
     ['object', { r: '0x1', s: '0x2', v: 27 }],
   ];
 
-  it.each(malformed)('should reject a %s signature as permit_signature_invalid', async (_label, signature) => {
+  it.each(malformed)('should reject a %s signature as invalid_exact_evm_payload_signature', async (_label, signature) => {
     const paymentPayload = createBasePayment();
     (paymentPayload.payload as any).signature = signature;
     const paymentRequirements = createPaymentRequirements('eip155:8453');
@@ -61,7 +61,7 @@ describe('POST /settle - malformed signature guard', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(false);
-    expect(response.body.errorReason).toBe('permit_signature_invalid');
+    expect(response.body.errorReason).toBe('invalid_exact_evm_payload_signature');
     // Never a gas/estimation error — that label means the facilitator misbehaved
     expect(response.body.errorReason).not.toMatch(/gas_estimation_failed/);
   });
@@ -73,8 +73,8 @@ describe('POST /settle - malformed signature guard', () => {
 
     const response = await sendSettle(app, paymentPayload, paymentRequirements);
 
-    // Well-formed but not a real signature: it must get past the format guard
-    expect(response.body.errorReason).not.toBe('permit_signature_invalid');
+    // Format validation passes; cryptographic verification still rejects it.
+    expect(response.body.errorReason).toBe('invalid_exact_evm_payload_signature');
   });
 
   it('should accept both uppercase and lowercase hex', async () => {
@@ -82,7 +82,7 @@ describe('POST /settle - malformed signature guard', () => {
       const paymentPayload = createBasePayment();
       (paymentPayload.payload as any).signature = sig;
       const response = await sendSettle(app, paymentPayload, createPaymentRequirements('eip155:8453'));
-      expect(response.body.errorReason).not.toBe('permit_signature_invalid');
+      expect(response.body.errorReason).toBe('invalid_exact_evm_payload_signature');
     }
   });
 });

@@ -2,9 +2,9 @@
 
 **Implementation:** SBC x402 Facilitator (`https://x402.stablecoin.xyz`)
 
-**Spec:** [coinbase/x402 — x402-specification-v2.md](https://github.com/coinbase/x402/blob/main/specs/x402-specification-v2.md)
+**Spec:** [x402 Foundation Exact EVM scheme](https://github.com/x402-foundation/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md)
 
-**Last verified:** 2026-03-09
+**Last verified:** 2026-09-17
 
 **Result:** all conformance checks passed ✓ | unit suite green ✓
 
@@ -39,7 +39,8 @@ FACILITATOR_URL=https://x402.stablecoin.xyz npm run conformance
 | Includes `eip155:8453` (Base mainnet)              | Network coverage                                             | ✓      |
 | Includes `eip155:84532` (Base Sepolia)             | Network coverage                                             | ✓      |
 | Includes `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Network coverage                                             | ✓      |
-| Advertises v1 + v2 kinds per network               | Backward compatibility (our extension)                       | ✓      |
+| EVM kinds advertise `assetTransferMethod: "permit2"` | Exact EVM Permit2 scheme                                    | ✓      |
+| EVM kinds are v2-only                               | Permit2 payload is a v2 Exact EVM method                     | ✓      |
 
 ---
 
@@ -101,7 +102,7 @@ All `invalidReason` / `errorReason` values follow the x402 v2 spec naming conven
 | `unsupported_scheme` | Scheme is not `"exact"` |
 | `invalid_network` | CAIP-2 network not supported |
 | `invalid_payload` | Missing or malformed payload/authorization |
-| `invalid_exact_evm_payload_signature` | ERC-2612 / Ed25519 signature verification failed |
+| `invalid_exact_evm_payload_signature` | Permit2 witness or optional ERC-2612 sponsorship signature verification failed |
 | `invalid_exact_evm_payload_authorization_valid_before` | Permit expired (`now > validBefore`) |
 | `invalid_exact_evm_payload_authorization_valid_after` | Permit not yet valid (`now < validAfter`) |
 | `invalid_exact_evm_payload_authorization_value_mismatch` | Amount less than required |
@@ -114,18 +115,20 @@ All `invalidReason` / `errorReason` values follow the x402 v2 spec naming conven
 
 ## v1 Backward Compatibility
 
-The facilitator accepts both v1 (flat) and v2 (envelope) payloads:
+The facilitator retains v1 normalization for Solana. EVM Exact payments are v2
+Permit2 only; legacy ERC-2612 EVM authorizations are rejected because their
+allowance signature does not bind the merchant recipient.
 
 - **Detection:** v1 payloads lack the `accepted` envelope (`!payload.accepted`)
 - **Normalization:** v1 fields are wrapped into v2 format internally (`maxAmountRequired` → `amount`)
 - **Response:** Same response shape for both versions
-- **/supported:** Advertises both `x402Version: 1` and `x402Version: 2` kinds per network
+- **/supported:** Advertises Permit2 EVM kinds only as `x402Version: 2`.
 
 ---
 
 ## Security Validation
 
-187 unit tests cover:
+The automated test suite covers:
 
 - **Amount manipulation:** zero, negative, uint256 max, non-numeric values
 - **Address injection:** zero address, malformed, wrong length, case sensitivity
@@ -145,10 +148,10 @@ The facilitator accepts both v1 (flat) and v2 (envelope) payloads:
 
 | Network        | CAIP-2                                    | Mechanism                      | Status |
 | -------------- | ----------------------------------------- | ------------------------------ | ------ |
-| Base mainnet   | `eip155:8453`                             | ERC-2612 Permit + TransferFrom | ✓ Live |
-| Base Sepolia   | `eip155:84532`                            | ERC-2612 Permit + TransferFrom | ✓ Live |
-| Radius mainnet | `eip155:723487`                            | ERC-2612 Permit + TransferFrom | ✓ Live |
-| Radius testnet | `eip155:72344`                            | ERC-2612 Permit + TransferFrom | ✓ Live |
+| Base mainnet   | `eip155:8453`                             | Permit2 + canonical x402 proxy | ✓ Live |
+| Base Sepolia   | `eip155:84532`                            | Permit2 + canonical x402 proxy | ✓ Live |
+| Radius mainnet | `eip155:723487`                            | Permit2 + canonical x402 proxy | ✓ Live |
+| Radius testnet | `eip155:72344`                            | Permit2 + canonical x402 proxy | ✓ Live |
 | Solana mainnet | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Delegated SPL transfer         | ✓ Live |
 
 ---
@@ -163,19 +166,19 @@ These are additive/non-breaking fields we include beyond the spec:
 | `expiredAt` | `/settle` | Unix timestamp when permit expired (on rejection) |
 | `suggestRetry` | `/settle` | Hints that client should re-sign with fresh permit |
 | Pre-settle deadline check | `/settle` | Rejects permits expired or within 30s of expiry before submitting on-chain |
-| Gas estimation dry-run | `/settle` | Calls `estimateContractGas` before submitting permit tx to catch reverts |
+| Proxy simulation | `/settle` | Simulates the canonical Permit2 proxy call immediately before broadcast |
 | Nonce replay protection | `/settle` | Server-side dedup prevents double-settle (saves gas) |
 | Rate limiting | `/verify`, `/settle` | 60 req/min per IP with `429` + `Retry-After` header |
 | Input size limit | All POST | 100kb body limit with `413 payload_too_large` response |
 | HTML content negotiation | `/supported` | Returns HTML view when `Accept: text/html` header present |
-| v1 backward compatibility | `/verify`, `/settle` | Accepts flat v1 payloads alongside v2 envelope format |
+| EIP-2612 gas sponsorship | EVM | Standard `eip2612GasSponsoring` extension supplies a Permit2 allowance atomically |
 
 ---
 
 ## Notes
 
 - **Scheme:** Only `"exact"` scheme is currently defined in x402 v2. Deferred/subscribe schemes are not part of the spec yet.
-- **EVM mechanism:** SBC token uses ERC-2612 Permit (not EIP-3009 `transferWithAuthorization`). The x402 v2 spec accommodates both via `extra.assetTransferMethod`.
+- **EVM mechanism:** Exact EVM uses Permit2 and the canonical x402 proxy. SBC's ERC-2612 permit is used only by the standard optional gas-sponsorship extension, so the payment witness binds recipient and amount.
 - **Settlement status codes:** Per spec, `/settle` always returns HTTP 200; success/failure is communicated via `success` boolean in the body.
 - **validAfter check:** Added 2026-03-09. Spec step 4 requires checking both `validAfter` and `validBefore` time bounds.
 - **Spender validation:** Added 2026-03-09. Spec step 5 requires `authorization.to` matches facilitator's own address.

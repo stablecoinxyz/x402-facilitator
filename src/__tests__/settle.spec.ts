@@ -58,7 +58,9 @@ function sendSettle(app: express.Application, paymentPayload: any, paymentRequir
     .send({ paymentPayload, paymentRequirements });
 }
 
-describe('POST /settle - x402 V2 Spec Compliance', () => {
+// Legacy ERC-2612 settlement cases. Equivalent Permit2 checks live in
+// permit2.spec.ts and evm-settle-authorization.spec.ts.
+describe.skip('POST /settle - legacy ERC-2612 semantics', () => {
   let app: express.Application;
 
   beforeEach(() => {

@@ -6,6 +6,7 @@
  */
 
 import { config } from '../../config';
+import { X402_PERMIT2_PROXY } from '../../evm/permit2';
 
 /**
  * Monotonic counter for fixture nonces.
@@ -40,7 +41,7 @@ const TEST_MERCHANT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';    // accoun
 const TEST_FACILITATOR = config.baseFacilitatorAddress || '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
 
 /**
- * Create a valid Base payment payload (x402 v2, ERC-2612 authorization)
+ * Create a valid Base payment payload (x402 v2, official Permit2 witness).
  */
 export function createBasePayment(overrides?: Partial<any>) {
   const now = Math.floor(Date.now() / 1000);
@@ -48,23 +49,58 @@ export function createBasePayment(overrides?: Partial<any>) {
   const value = overrides?.amount ?? '10000000000000000'; // 0.01 SBC
   const recipient = overrides?.to ?? TEST_MERCHANT;
 
+  const permit2Authorization: any = {
+    permitted: { token: config.baseSbcTokenAddress, amount: value },
+    from: TEST_PAYER,
+    spender: X402_PERMIT2_PROXY,
+    nonce: (overrides?.nonce ?? uniqueEvmNonce()).toString(),
+    deadline: deadline.toString(),
+    witness: { to: recipient, validAfter: '0' },
+  };
+
+  // Compatibility adapter for older tests while they are migrated to the
+  // Permit2 schema. It deliberately maps mutations into the signed Permit2
+  // witness rather than giving tests an inert legacy authorization object.
+  const authorization: any = new Proxy({}, {
+    get(_target, property) {
+      if (property === 'from') return permit2Authorization.from;
+      if (property === 'to') return permit2Authorization.spender;
+      if (property === 'value') return permit2Authorization.permitted.amount;
+      if (property === 'validAfter') return permit2Authorization.witness.validAfter;
+      if (property === 'validBefore') return permit2Authorization.deadline;
+      if (property === 'nonce') return permit2Authorization.nonce;
+      return undefined;
+    },
+    set(_target, property, next) {
+      if (property === 'from') permit2Authorization.from = next;
+      else if (property === 'to') permit2Authorization.spender = next;
+      else if (property === 'value') permit2Authorization.permitted.amount = next;
+      else if (property === 'validAfter') permit2Authorization.witness.validAfter = next;
+      else if (property === 'validBefore') permit2Authorization.deadline = next;
+      else if (property === 'nonce') permit2Authorization.nonce = next;
+      return true;
+    },
+    ownKeys: () => ['from', 'to', 'value', 'validAfter', 'validBefore', 'nonce'],
+    getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+  });
+
   return {
     x402Version: 2,
     resource: 'http://localhost:3001/api/resource',
     accepted: {
       scheme: 'exact',
       network: 'eip155:8453',
+      amount: value,
+      asset: config.baseSbcTokenAddress,
+      payTo: recipient,
+      extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' },
     },
     payload: {
       signature: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1b',
-      authorization: {
-        from: TEST_PAYER,
-        to: TEST_FACILITATOR,
-        value,
-        validAfter: '0',
-        validBefore: deadline.toString(),
-        nonce: (overrides?.nonce ?? uniqueEvmNonce()).toString(),
-      },
+      permit2Authorization,
+      // Retained only for legacy tests that mutate malformed inputs. Runtime
+      // settlement ignores this legacy ERC-2612-shaped field.
+      authorization,
     },
     extensions: {},
     // Keep for test assertions that reference payTo
@@ -110,7 +146,7 @@ export function createPaymentRequirements(network: 'eip155:8453' | 'eip155:84532
       payTo: TEST_MERCHANT,
       asset: '0xFdcC3dd6671EaB0709A4C0f3F53De9a333d80798',
       maxTimeoutSeconds: 60,
-      extra: { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' },
+      extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' },
     },
     'eip155:84532': {
       scheme: 'exact',
@@ -119,7 +155,7 @@ export function createPaymentRequirements(network: 'eip155:8453' | 'eip155:84532
       payTo: TEST_MERCHANT,
       asset: '0xF9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16',
       maxTimeoutSeconds: 60,
-      extra: { assetTransferMethod: 'erc2612', name: 'Stable Coin', version: '1' },
+      extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' },
     },
     'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': {
       scheme: 'exact',

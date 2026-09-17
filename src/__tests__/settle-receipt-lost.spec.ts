@@ -67,7 +67,9 @@ function transferBroadcasts() {
   return mockWriteContract.mock.calls.filter(c => c[0]?.functionName === 'transferFrom').length;
 }
 
-describe('Settlement after transferFrom is broadcast', () => {
+// This suite asserted the retired two-transaction ERC-2612 flow. Permit2 has
+// one proxy transaction and is covered by Permit2-specific integration tests.
+describe.skip('Settlement after transferFrom is broadcast', () => {
   let app: express.Application;
   const originalRealSettlement = process.env.ENABLE_REAL_SETTLEMENT;
 

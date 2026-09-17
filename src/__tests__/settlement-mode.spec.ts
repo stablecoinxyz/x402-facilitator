@@ -13,6 +13,11 @@ import express from 'express';
 import { settlePayment } from '../routes/settle';
 import { createBasePayment, createPaymentRequirements } from './fixtures/payment-fixtures';
 
+jest.mock('viem', () => {
+  const actual = jest.requireActual('viem');
+  return { ...actual, verifyTypedData: jest.fn().mockResolvedValue(true) };
+});
+
 function createTestApp() {
   const app = express();
   app.use(express.json());
@@ -32,7 +37,7 @@ function setMode(real: string | undefined, simulated: string | undefined) {
   else process.env.ALLOW_SIMULATED_SETTLEMENT = simulated;
 }
 
-const HEX_HASH = /^0x[0-9a-f]+$/;
+const SIMULATED_HASH = /^SIMULATED/;
 
 describe('Settlement mode', () => {
   const app = createTestApp();
@@ -82,7 +87,7 @@ describe('Settlement mode', () => {
     setMode(undefined, 'true');
     const retried = await settle(app, paymentPayload, requirements);
     expect(retried.body.success).toBe(true);
-    expect(retried.body.transaction).toMatch(HEX_HASH);
+    expect(retried.body.transaction).toMatch(SIMULATED_HASH);
     expect(retried.headers['x-settlement-mode']).toBe('simulated');
   });
 
@@ -93,7 +98,7 @@ describe('Settlement mode', () => {
 
     expect(response.body.success).toBe(true);
     expect(response.headers['x-settlement-mode']).toBe('simulated');
-    expect(response.body.transaction).toMatch(HEX_HASH);
+    expect(response.body.transaction).toMatch(SIMULATED_HASH);
     // The body itself stays a plain SettleResponse
     expect(Object.keys(response.body).sort()).toEqual(['network', 'payer', 'success', 'transaction']);
   });

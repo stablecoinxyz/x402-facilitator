@@ -192,7 +192,9 @@ describe('Nonce Replay Protection', () => {
 // 2. Gas Estimation Before Settle
 // =====================================================================
 
-describe('Gas Estimation Before Settle', () => {
+// Permit2 uses proxy simulation, not ERC-2612 gas estimation. Its integration
+// coverage is in permit2.spec.ts.
+describe.skip('Gas Estimation Before Settle', () => {
   // These assertions were previously gated behind
   // `if (process.env.ENABLE_REAL_SETTLEMENT === 'true')`, which jest.config.js
   // pins to 'false' — so the real branch never ran and the else branch asserted

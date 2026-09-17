@@ -57,9 +57,10 @@ describe('EVM /settle enforces authorization constraints independently of /verif
     expect(res.body.success).toBe(true);
   });
 
-  it('step 3: rejects a permit worth less than the required amount', async () => {
+  it('rejects a Permit2 authorization worth less than the required amount', async () => {
     const requirements = createPaymentRequirements(BASE); // amount 10000000000000000
-    const underpaying = createBasePayment({ amount: '1' }); // one base unit
+    const underpaying = createBasePayment();
+    underpaying.payload.permit2Authorization.permitted.amount = '1';
 
     const res = await settle(underpaying, requirements);
 
@@ -69,13 +70,15 @@ describe('EVM /settle enforces authorization constraints independently of /verif
     expect(res.body.transaction).toBe('');
   });
 
-  it('step 3: accepts a permit worth more than the required amount', async () => {
+  it('rejects a Permit2 authorization worth more than the exact requirement', async () => {
     const requirements = createPaymentRequirements(BASE);
-    const overpaying = createBasePayment({ amount: '20000000000000000' });
+    const overpaying = createBasePayment();
+    overpaying.payload.permit2Authorization.permitted.amount = '20000000000000000';
 
     const res = await settle(overpaying, requirements);
 
-    expect(res.body.success).toBe(true);
+    expect(res.body.success).toBe(false);
+    expect(res.body.errorReason).toBe('invalid_exact_evm_payload_authorization_value_mismatch');
   });
 
   it('step 4: rejects a permit whose validAfter has not arrived', async () => {

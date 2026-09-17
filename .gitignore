@@ -4,6 +4,7 @@ coverage
 .env
 .DS_Store
 *.log
+docs/local-erc2612-security-plan.md
 demo/.data/
 CLAUDE.md
 debug/
