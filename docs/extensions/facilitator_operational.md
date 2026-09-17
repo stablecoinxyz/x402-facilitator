@@ -157,5 +157,17 @@ Before settlement:
 
 - **SBC x402 Facilitator** — https://x402.stablecoin.xyz
 - Unit tests including security exploit coverage (`npm test`)
-- v2 conformance checks (`npm run conformance`)
 - Networks: Base, Base Sepolia, Radius, Radius Testnet, Solana
+
+The `npm run conformance` harness (`src/__tests__/conformance.ts`) still builds legacy ERC-2612 EVM payloads and is pending migration to the Permit2 Exact EVM scheme, so it does not yet reflect current EVM behavior.
+
+### Implementation status (SBC reference, after the Permit2 Exact EVM migration)
+
+The proposal text above is normative and version-independent. Where the SBC EVM path now diverges from it:
+
+| Section | Proposal | SBC reference today |
+| --- | --- | --- |
+| §1 Deadline-aware verify | `remainingSeconds` on `isValid: true` | Implemented, computed as `deadline - now` from the Permit2 authorization |
+| §2 Pre-settle deadline check | Reject within a 30s `SAFETY_MARGIN` with `permit_expired` | Rejects `now > deadline` (and `now < witness.validAfter`) before any chain work, returning `invalid_exact_evm_payload_authorization_valid_before` / `_valid_after`; no 30s margin and no `permit_expired` code |
+| §3 Gas estimation | `estimateContractGas`, error `gas_estimation_failed` | Uses `simulateContract` against the canonical proxy immediately before broadcast, skipped on Radius; on-chain revert categories are surfaced instead of a `gas_estimation_failed` code |
+| §4 Server-side nonce dedup | In-memory nonce set, error `nonce_already_settled` | Applied on Solana and simulated EVM only; live EVM Permit2 relies on the on-chain Permit2 nonce plus the per-wallet queue |

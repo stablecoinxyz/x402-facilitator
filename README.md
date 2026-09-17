@@ -4,7 +4,7 @@ SBC x402 Facilitator — verifies and settles payments using the [x402 protocol]
 
 Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 support is used only by the optional `eip2612GasSponsoring` extension to establish Permit2 allowance; the Permit2 witness and canonical x402 proxy bind the payment recipient and amount. Solana uses delegated SPL transfers.
 
-**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — conformant, verify with `npm run conformance` | **[Observability →](./grafana/README.md)**
+**[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — unit suite green (`npm test`); the `npm run conformance` harness still builds legacy ERC-2612 EVM payloads and is pending migration to Permit2 | **[Observability →](./grafana/README.md)**
 
 ## Supported Networks
 
@@ -109,6 +109,8 @@ Simulation is opt-in. A deployment with neither flag set refuses to settle rathe
 
 Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain approval the facilitator needs, then sends a v2 verify + settle request.
 
+> **Note:** the bundled demo client (`demo/`), the mainnet smoke script (`scripts/smoke-mainnet.ts`), and the conformance harness (`src/__tests__/conformance.ts`) still build legacy ERC-2612 EVM payloads, which the migrated facilitator now rejects with `unsupported_asset_transfer_method` / `invalid_payload`. `npm run demo` and `npm run conformance` against a Permit2 EVM endpoint fail until those clients are migrated to the Permit2 witness. The Solana smoke scripts (`scripts/smoke-solana-*.ts`) are unaffected. The Permit2 flow described below is the target shape.
+
 ```bash
 npm run setup -- --network <name>   # generate wallets, approve, write .env
 npm run dev                          # start server (Terminal 1)
@@ -152,7 +154,7 @@ Set `LOG_LEVEL` env var to control verbosity (`debug`, `info`, `warn`, `error`).
 | Metric | Type | Labels |
 |--------|------|--------|
 | `x402_verify_total` | Counter | `network`, `result` (valid/invalid/bad_request/rpc_error/unknown) |
-| `x402_settle_total` | Counter | `network`, `result` (success/failed/replay/expired/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown) |
+| `x402_settle_total` | Counter | `network`, `result` (success/failed/settlement_pending/settlement_disabled/replay/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown; `expired` is a legacy label no live path emits — see [grafana/README.md](./grafana/README.md#settle-result-labels)) |
 | `x402_verify_duration_seconds` | Histogram | `network` |
 | `x402_settle_duration_seconds` | Histogram | `network` |
 | Default process metrics | — | CPU, memory, event loop lag |
@@ -194,14 +196,19 @@ sum by (network) (rate(x402_settle_total{result!="success"}[5m]))
 
 See [`grafana/alerts.yaml`](./grafana/alerts.yaml) for full PromQL expressions.
 
-| Alert | Condition |
-|-------|-----------|
-| Settle failure rate high | Non-success rate > 10% over 5min |
-| RPC errors spiking | 3+ RPC failures in 5min |
-| Nonce conflicts detected | Any nonce collision |
-| Permit expired attempts | Any expired permit settle |
-| Signature errors spiking | 3+ invalid signatures in 5min |
-| Health down | No facilitator logs for 10min |
+These mirror the generated `grafana/alerts.yaml` snapshot (regenerated from live Grafana, not hand-edited):
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| Facilitator unreachable | Critical | `/metrics` unreachable for 5min |
+| Settle faults on our side | Critical | 2+ facilitator-fault settle errors in 15min |
+| Verify faults on our side | Critical | 3+ facilitator-fault verify errors in 15min |
+| Facilitator restart loop | Warning | 4+ restarts in 30min |
+| Nonce conflicts detected | Warning | Any nonce conflict in 15min |
+| Settle latency p95 high | Warning | p95 settle latency > 60s over 30min |
+| Client error volume elevated | Info | 20+ client-side settle rejections in 1h |
+| Permit expired attempts (dashboard only) | Info | 10+ `expired`-result attempts in 1h — legacy label no live path emits |
+| Settlement succeeded | Info | Any successful settle in 1h |
 
 ## Development
 

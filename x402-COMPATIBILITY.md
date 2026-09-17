@@ -136,10 +136,10 @@ The automated test suite covers:
 - **Amount manipulation:** zero, negative, uint256 max, non-numeric values
 - **Address injection:** zero address, malformed, wrong length, case sensitivity
 - **Deadline attacks:** far-future, validAfter in future, deadline=0, boundary conditions
-- **Spender mismatch:** wrong facilitator address, case-insensitive comparison
+- **Spender mismatch:** Permit2 `spender` that is not the canonical x402 proxy, case-insensitive comparison
 - **Cross-network attacks:** EVM payload with Solana network, Solana payload with EVM network
 - **Type confusion:** null, array, string, undefined, boolean payloads
-- **Nonce replay protection:** server-side dedup rejects double-settle before on-chain submission
+- **Nonce replay protection:** server-side dedup rejects double-settle before on-chain submission on Solana and simulated EVM; live EVM Permit2 relies on the on-chain Permit2 nonce
 - **Signature edge cases:** empty, non-hex, oversized, undefined signatures
 - **Oversized payloads:** >1MB payload handling
 - **Rate limiting:** per-IP throttling on payment endpoints
