@@ -1,5 +1,6 @@
 import { createWalletClient, http, parseEther, formatEther } from 'viem';
 import { loadOrGenerateKey, getAccount, getPublicClient, getNetwork, getViemChain, DATA_DIR } from './utils';
+import { PERMIT2_ADDRESS } from '../src/evm/permit2';
 import fs from 'fs';
 import path from 'path';
 
@@ -113,23 +114,27 @@ async function setup() {
     process.exit(1);
   }
 
-  // 5. Approve Facilitator
-  console.log('\n🤝 Approving Facilitator as Spender...');
+  // 5. Approve Permit2.  The payment signature authorizes the x402 proxy for
+  // one transfer; this ERC-20 approval only lets Permit2 pull the token.
+  console.log('\n🤝 Approving Permit2 as Spender...');
   const approvalAmount = BigInt(100) * BigInt(10) ** BigInt(network.sbcDecimals);
 
   const approveHash = await clientWallet.writeContract({
       address: network.sbcAddress,
       abi: ERC20_ABI,
       functionName: 'approve',
-      args: [facilitator.address, approvalAmount]
+      args: [PERMIT2_ADDRESS, approvalAmount]
   });
 
   console.log(`   Tx Hash: ${approveHash}`);
   if (network.explorerTxUrl) {
     console.log(`   Explorer: ${network.explorerTxUrl}${approveHash}`);
   }
-  await publicClient.waitForTransactionReceipt({ hash: approveHash });
-  console.log('   ✅ Facilitator approved to spend SBC');
+  const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+  if (approvalReceipt.status !== 'success') {
+    throw new Error(`Permit2 approval reverted: ${approveHash}`);
+  }
+  console.log('   ✅ Permit2 approved to spend SBC');
 
   // 6. Generate .env file — map network to the right env var prefix
   console.log('\n📝 Generating .env file...');
@@ -154,8 +159,10 @@ ${envPrefix}_SBC_DECIMALS=${network.sbcDecimals}
 ${envPrefix}_FACILITATOR_PRIVATE_KEY=${loadOrGenerateKey('facilitator')}
 ${envPrefix}_FACILITATOR_ADDRESS=${facilitator.address}
 
-# Real Settlement Enabled (Required for permit + transferFrom to work)
-ENABLE_REAL_SETTLEMENT=true
+# Investor demo mode: verifies the real Permit2 signature and on-chain SBC
+# balance/approval, then returns a clearly marked simulated settlement.
+ENABLE_REAL_SETTLEMENT=false
+ALLOW_SIMULATED_SETTLEMENT=true
 
 # Solana Config (Optional)
 SOLANA_RPC_URL=https://api.mainnet-beta.solana.com

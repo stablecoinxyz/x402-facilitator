@@ -31,7 +31,7 @@ type SettlementMode = 'real' | 'simulated' | 'disabled';
  * transfers. A kill switch that covers one of two chains reads as a kill switch
  * and is not one.
  */
-function resolveSettlementMode(): SettlementMode {
+export function resolveSettlementMode(): SettlementMode {
   if (process.env.ENABLE_REAL_SETTLEMENT === 'true') return 'real';
   if (process.env.ALLOW_SIMULATED_SETTLEMENT === 'true') return 'simulated';
   return 'disabled';
@@ -390,19 +390,19 @@ export async function settlePayment(req: Request, res: Response) {
       return res.json({ success: false, payer: parsedPermit2.payer, transaction: '', network, errorReason: parsedPermit2.reason });
     }
     const tokenConfigForPermit2 = resolveToken(networkConfig.chainId, parsedPermit2.auth.permitted.token);
-    if (!tokenConfigForPermit2) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
-    if (parsedPermit2.auth.from.toLowerCase() === parsedPermit2.auth.witness.to.toLowerCase()) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_self_payment' });
+    if (!tokenConfigForPermit2) { settleTotal.inc({ network, result: 'failed' }); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' }); }
+    if (parsedPermit2.auth.from.toLowerCase() === parsedPermit2.auth.witness.to.toLowerCase()) { settleTotal.inc({ network, result: 'failed' }); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_self_payment' }); }
     // Refuse before signature or RPC work when this instance is not permitted
     // to settle. A disabled facilitator must never look like it made a payment.
     const permit2Mode = resolveSettlementMode();
-    if (permit2Mode === 'disabled') return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'settlement_disabled' });
+    if (permit2Mode === 'disabled') { settleTotal.inc({ network, result: 'settlement_disabled' }); recordDuration(startTime, network); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'settlement_disabled' }); }
     let permit2SignatureOk = false;
     try { permit2SignatureOk = await verifyPermit2Signature(parsedPermit2.auth, parsedPermit2.signature, networkConfig.chainId); } catch { permit2SignatureOk = false; }
-    if (!permit2SignatureOk) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_exact_evm_payload_signature' });
+    if (!permit2SignatureOk) { settleTotal.inc({ network, result: 'invalid_signature' }); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_exact_evm_payload_signature' }); }
     if (parsedPermit2.sponsor) {
       let sponsorSignatureOk = false;
       try { sponsorSignatureOk = await verifySponsorSignature(parsedPermit2.sponsor, tokenConfigForPermit2.name, tokenConfigForPermit2.version, networkConfig.chainId); } catch { sponsorSignatureOk = false; }
-      if (!sponsorSignatureOk) return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_exact_evm_payload_signature' });
+      if (!sponsorSignatureOk) { settleTotal.inc({ network, result: 'invalid_signature' }); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_exact_evm_payload_signature' }); }
     }
     if (permit2Mode === 'simulated') {
       const previous = nonceTracker.getSettled(network, parsedPermit2.auth.from, parsedPermit2.auth.nonce);
@@ -424,7 +424,19 @@ export async function settlePayment(req: Request, res: Response) {
     const publicClient = createPublicClient({ chain, transport: http(networkConfig.rpcUrl) });
     const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
     const tokenCode = await publicClient.getCode({ address: parsedPermit2.auth.permitted.token as `0x${string}` });
-    if (!tokenCode || tokenCode === '0x') return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
+    if (!tokenCode || tokenCode === '0x') {
+      log.error({ payer: parsedPermit2.auth.from, network, token: parsedPermit2.auth.permitted.token, result: 'settlement_asset_unavailable' }, 'Settlement refused: configured token has no deployed bytecode on the target chain');
+      settleTotal.inc({ network, result: 'settlement_asset_unavailable' });
+      recordDuration(startTime, network);
+      return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
+    }
+    const proxyCode = await publicClient.getCode({ address: X402_PERMIT2_PROXY });
+    if (!proxyCode || proxyCode === '0x') {
+      log.error({ payer: parsedPermit2.auth.from, network, proxy: X402_PERMIT2_PROXY, errorReason: 'settlement_proxy_unavailable' }, 'Settlement refused: canonical Permit2 proxy has no deployed bytecode');
+      settleTotal.inc({ network, result: 'settlement_proxy_unavailable' });
+      recordDuration(startTime, network);
+      return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'settlement_proxy_unavailable' });
+    }
     const permit = { permitted: { token: parsedPermit2.auth.permitted.token as `0x${string}`, amount: BigInt(parsedPermit2.auth.permitted.amount) }, nonce: BigInt(parsedPermit2.auth.nonce), deadline: BigInt(parsedPermit2.auth.deadline) };
     const witness = { to: parsedPermit2.auth.witness.to as `0x${string}`, validAfter: BigInt(parsedPermit2.auth.witness.validAfter) };
     const args: any = parsedPermit2.sponsor ? [{ value: BigInt(parsedPermit2.sponsor.amount), deadline: BigInt(parsedPermit2.sponsor.deadline), r: `0x${parsedPermit2.sponsor.signature.slice(2, 66)}`, s: `0x${parsedPermit2.sponsor.signature.slice(66, 130)}`, v: parseInt(parsedPermit2.sponsor.signature.slice(130), 16) }, permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`] : [permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`];

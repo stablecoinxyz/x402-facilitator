@@ -43,7 +43,7 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
 | `GET` | `/supported` | Capability discovery — returns `kinds`, `extensions`, `signers` |
 | `POST` | `/verify` | Verify a `paymentPayload` (v2 JSON object) |
 | `POST` | `/settle` | Execute on-chain settlement |
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Liveness plus the resolved settlement mode (`real`/`simulated`/`disabled`); the bundled demo refuses to settle unless it reads `simulated` |
 
 ### v2 Request Format
 
@@ -87,7 +87,7 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
 }
 ```
 
-`payload.permit2Authorization` is the signed Permit2 witness. `spender` is the canonical x402 proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`), `permitted.token` is the asset, and `witness.to` is the merchant `payTo` — the proxy enforces `witness.to`, so the facilitator cannot redirect the payment. If the payer has not pre-approved Permit2 on-chain, add an `eip2612GasSponsoring` extension under `extensions` carrying a signed SBC ERC-2612 permit. Its `info` object holds `from`, `asset`, `spender` (the Permit2 contract `0x000000000022D473030F116dDEE9F6B43aC78BA3`), `amount`, `nonce`, `deadline`, `signature`, and `version: "1"`.
+`payload.permit2Authorization` is the signed Permit2 witness. `spender` is the canonical x402 proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`), `permitted.token` is the asset, and `witness.to` is the merchant `payTo` — the proxy enforces `witness.to`, so the facilitator cannot redirect the payment. If the payer has not pre-approved Permit2 on-chain, add an `eip2612GasSponsoring` extension under `extensions` carrying a signed SBC ERC-2612 permit. Its `info` object holds `from`, `asset`, `spender` (the Permit2 contract `0x000000000022D473030F116dDEE9F6B43aC78BA3`), `amount`, `nonce`, `deadline`, `signature`, and `version: "1"`. The sponsored `amount` must equal the exact payment amount (an over-broad allowance is rejected) and `deadline` must be at least the Permit2 authorization `deadline`.
 
 ## Configuration
 
@@ -100,21 +100,23 @@ The server auto-selects the next available port if `FACILITATOR_PORT` (default 3
 | `ENABLE_REAL_SETTLEMENT` | `ALLOW_SIMULATED_SETTLEMENT` | `/settle` behavior |
 |---|---|---|
 | `true` | any | Real on-chain settlement (production) |
-| not `true` | `true` | Simulated: no on-chain call, fabricated hash, response carries header `X-Settlement-Mode: simulated` (local development only) |
+| not `true` | `true` | Simulated: no on-chain call, fabricated hash, response carries header `X-Settlement-Mode: simulated` (local development and the bundled demo) |
 | not `true` | not `true` | Refuses: `success: false`, `errorReason: "settlement_disabled"` |
 
 Simulation is opt-in. A deployment with neither flag set refuses to settle rather than reporting a settlement that never happened.
 
 ## Demo
 
-Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain approval the facilitator needs, then sends a v2 verify + settle request.
+Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain Permit2 approval settlement needs, then sends a v2 verify + settle request.
 
-> **Note:** the bundled demo client (`demo/`), the mainnet smoke script (`scripts/smoke-mainnet.ts`), and the conformance harness (`src/__tests__/conformance.ts`) still build legacy ERC-2612 EVM payloads, which the migrated facilitator now rejects with `unsupported_asset_transfer_method` / `invalid_payload`. `npm run demo` and `npm run conformance` against a Permit2 EVM endpoint fail until those clients are migrated to the Permit2 witness. The Solana smoke scripts (`scripts/smoke-solana-*.ts`) are unaffected. The Permit2 flow described below is the target shape.
+> **Safety:** `npm run setup` broadcasts a real ERC-20 `approve(Permit2, 100 SBC)` transaction and costs gas. It gives the facilitator no allowance, but gives Permit2 a standing 100 SBC allowance. Use `--network base-sepolia` for an investor demo unless the mainnet wallet is intentionally funded and approved. The generated configuration uses simulated settlement; the client refuses a real or unknown server unless `DEMO_ALLOW_REAL_SETTLEMENT=true` is explicitly set.
+>
+> The bundled demo client uses the standard Exact EVM Permit2 witness flow. The mainnet smoke script (`scripts/smoke-mainnet.ts`) and conformance harness (`src/__tests__/conformance.ts`) still need their own Permit2 migration. The Solana smoke scripts (`scripts/smoke-solana-*.ts`) are unaffected. Radius and Radius testnet are not investor-demo targets until the canonical Permit2 and x402 proxy deployments have been bytecode-verified and a real testnet settlement has passed.
 
 ```bash
 npm run setup -- --network <name>   # generate wallets, approve, write .env
-npm run dev                          # start server (Terminal 1)
-npm run demo -- --network <name>    # run demo client (Terminal 2)
+npm run dev                          # starts the facilitator in simulated demo mode
+npm run demo -- --network <name>     # signs, verifies, and simulates a payment
 ```
 
 **Networks:** `base` (default), `base-sepolia`, `radius`, `radius-testnet`
@@ -154,7 +156,7 @@ Set `LOG_LEVEL` env var to control verbosity (`debug`, `info`, `warn`, `error`).
 | Metric | Type | Labels |
 |--------|------|--------|
 | `x402_verify_total` | Counter | `network`, `result` (valid/invalid/bad_request/rpc_error/unknown) |
-| `x402_settle_total` | Counter | `network`, `result` (success/failed/settlement_pending/settlement_disabled/replay/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown; `expired` is a legacy label no live path emits — see [grafana/README.md](./grafana/README.md#settle-result-labels)) |
+| `x402_settle_total` | Counter | `network`, `result` (success/failed/settlement_pending/settlement_disabled/settlement_proxy_unavailable/settlement_asset_unavailable/replay/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown; `expired` is a legacy label no live path emits — see [grafana/README.md](./grafana/README.md#settle-result-labels)) |
 | `x402_verify_duration_seconds` | Histogram | `network` |
 | `x402_settle_duration_seconds` | Histogram | `network` |
 | Default process metrics | — | CPU, memory, event loop lag |

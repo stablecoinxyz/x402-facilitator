@@ -7,9 +7,10 @@ import { config } from './config';
 import { createRateLimiter } from './protection/rate-limiter';
 import { createSizeLimiter } from './protection/size-limiter';
 import { verifyPayment } from './routes/verify';
-import { settlePayment } from './routes/settle';
+import { settlePayment, resolveSettlementMode } from './routes/settle';
 import { getSupportedNetworks } from './routes/supported';
 import { homePage } from './routes/home';
+import { healthCheck } from './routes/health';
 
 const app = express();
 
@@ -36,9 +37,7 @@ app.get('/metrics', metricsHandler);
 app.get('/', homePage);
 
 // Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'SBC x402 Facilitator' });
-});
+app.get('/health', healthCheck);
 
 // x402 Facilitator endpoints
 app.get('/supported', getSupportedNetworks);
@@ -65,9 +64,7 @@ function rpcHost(url: string | undefined): string {
         solana: rpcHost(config.solanaRpcUrl),
         base: rpcHost(config.baseRpcUrl),
       },
-      settlement: process.env.ENABLE_REAL_SETTLEMENT === 'true'
-        ? 'real'
-        : (process.env.ALLOW_SIMULATED_SETTLEMENT === 'true' ? 'simulated' : 'disabled'),
+      settlement: resolveSettlementMode(),
       networks: {
         baseMainnet: config.baseFacilitatorAddress || null,
         baseSepolia: config.baseSepoliaFacilitatorAddress || null,

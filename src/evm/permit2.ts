@@ -55,6 +55,7 @@ export function parsePermit2(payload: any, requirements: any, extensions: any = 
   const auth = payload?.permit2Authorization;
   const payer = typeof auth?.from === 'string' ? auth.from : 'unknown';
   if (requirements?.extra?.assetTransferMethod !== 'permit2') return { ok: false, reason: 'unsupported_asset_transfer_method', payer };
+  if ((requirements.extra.name !== undefined && typeof requirements.extra.name !== 'string') || (requirements.extra.version !== undefined && typeof requirements.extra.version !== 'string')) return { ok: false, reason: 'invalid_payload', payer };
   if (!auth) return { ok: false, reason: 'invalid_payload', payer };
   if (!isSignature(payload?.signature)) return { ok: false, reason: 'invalid_exact_evm_payload_signature', payer };
   if (!isAddress(auth.from) || !isAddress(auth.permitted?.token) || !isAddress(auth.spender) || !isAddress(auth.witness?.to) || !isUint(auth.permitted?.amount) || !isUint(auth.nonce) || !isUint(auth.deadline) || !isUint(auth.witness?.validAfter)) return { ok: false, reason: 'invalid_payload', payer };
@@ -66,7 +67,7 @@ export function parsePermit2(payload: any, requirements: any, extensions: any = 
   if (now > BigInt(auth.deadline)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_before', payer };
   const sponsor = extensions?.eip2612GasSponsoring?.info;
   if (sponsor !== undefined) {
-    if (!isAddress(sponsor?.from) || !isAddress(sponsor?.asset) || !isAddress(sponsor?.spender) || !isUint(sponsor?.amount) || !isUint(sponsor?.nonce) || !isUint(sponsor?.deadline) || !isSignature(sponsor?.signature) || sponsor?.version !== '1' || !sameAddress(sponsor.from, auth.from) || !sameAddress(sponsor.asset, auth.permitted.token) || !sameAddress(sponsor.spender, PERMIT2_ADDRESS) || BigInt(sponsor.amount) < BigInt(auth.permitted.amount) || BigInt(sponsor.deadline) < BigInt(auth.deadline)) return { ok: false, reason: 'invalid_payload', payer };
+    if (!isAddress(sponsor?.from) || !isAddress(sponsor?.asset) || !isAddress(sponsor?.spender) || !isUint(sponsor?.amount) || !isUint(sponsor?.nonce) || !isUint(sponsor?.deadline) || !isSignature(sponsor?.signature) || sponsor?.version !== '1' || !sameAddress(sponsor.from, auth.from) || !sameAddress(sponsor.asset, auth.permitted.token) || !sameAddress(sponsor.spender, PERMIT2_ADDRESS) || BigInt(sponsor.amount) !== BigInt(auth.permitted.amount) || BigInt(sponsor.deadline) < BigInt(auth.deadline)) return { ok: false, reason: 'invalid_payload', payer };
   }
   return { ok: true, auth, signature: payload.signature, ...(sponsor ? { sponsor } : {}) };
 }
@@ -82,8 +83,8 @@ export async function verifySponsorSignature(s: Eip2612Sponsoring, name: string,
 export const proxyAbi = [{ type: 'function', name: 'settle', stateMutability: 'nonpayable', inputs: [
   { name: 'permit', type: 'tuple', components: [{ name: 'permitted', type: 'tuple', components: [{ name: 'token', type: 'address' }, { name: 'amount', type: 'uint256' }] }, { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] },
   { name: 'owner', type: 'address' }, { name: 'witness', type: 'tuple', components: [{ name: 'to', type: 'address' }, { name: 'validAfter', type: 'uint256' }] }, { name: 'signature', type: 'bytes' },
-] }, { type: 'function', name: 'settleWithPermit', stateMutability: 'nonpayable', inputs: [
+], outputs: [] }, { type: 'function', name: 'settleWithPermit', stateMutability: 'nonpayable', inputs: [
   { name: 'permit2612', type: 'tuple', components: [{ name: 'value', type: 'uint256' }, { name: 'deadline', type: 'uint256' }, { name: 'r', type: 'bytes32' }, { name: 's', type: 'bytes32' }, { name: 'v', type: 'uint8' }] },
   { name: 'permit', type: 'tuple', components: [{ name: 'permitted', type: 'tuple', components: [{ name: 'token', type: 'address' }, { name: 'amount', type: 'uint256' }] }, { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] },
   { name: 'owner', type: 'address' }, { name: 'witness', type: 'tuple', components: [{ name: 'to', type: 'address' }, { name: 'validAfter', type: 'uint256' }] }, { name: 'signature', type: 'bytes' },
-] }] as const;
+], outputs: [] }] as const;

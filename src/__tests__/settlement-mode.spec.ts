@@ -11,6 +11,7 @@
 import request from 'supertest';
 import express from 'express';
 import { settlePayment } from '../routes/settle';
+import { settleTotal } from '../lib/metrics';
 import { createBasePayment, createPaymentRequirements } from './fixtures/payment-fixtures';
 
 jest.mock('viem', () => {
@@ -51,6 +52,7 @@ describe('Settlement mode', () => {
 
   it('refuses to settle when neither flag is set, and fabricates nothing', async () => {
     setMode(undefined, undefined);
+    settleTotal.reset();
 
     const response = await settle(app, createBasePayment({ nonce: 9001 }), requirements);
 
@@ -62,6 +64,11 @@ describe('Settlement mode', () => {
       network: 'eip155:8453',
     });
     expect(response.headers['x-settlement-mode']).toBeUndefined();
+    const metric = await settleTotal.get();
+    expect(metric.values).toContainEqual(expect.objectContaining({
+      labels: { network: 'eip155:8453', result: 'settlement_disabled' },
+      value: 1,
+    }));
   });
 
   it('treats ENABLE_REAL_SETTLEMENT=false exactly like unset', async () => {
