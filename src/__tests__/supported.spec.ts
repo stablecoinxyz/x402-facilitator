@@ -123,21 +123,28 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       }
     });
 
-    it('does not advertise Solana even when its keys are configured, pending durable replay storage', async () => {
+    it('advertises SVM Exact only after an explicit network enablement', async () => {
       const priorAddress = config.solanaFacilitatorAddress;
       const priorPrivateKey = config.solanaFacilitatorPrivateKey;
+      const priorEnabled = config.solanaSvmExactEnabled;
+      const priorNetwork = config.solanaSvmNetwork;
       config.solanaFacilitatorAddress = '2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K';
       config.solanaFacilitatorPrivateKey = 'configured-for-test';
+      config.solanaSvmExactEnabled = true;
+      config.solanaSvmNetwork = 'solana-devnet';
 
       try {
         const response = await request(app).get('/supported');
-        const { v2, v1 } = kindsFor(response.body, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'solana-mainnet-beta');
-        expect(v2).toHaveLength(0);
-        expect(v1).toHaveLength(0);
-        expect(response.body.signers['solana:*']).toBeUndefined();
+        const { v2, v1 } = kindsFor(response.body, 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', 'solana-devnet');
+        expect(v2).toHaveLength(1);
+        expect(v1).toHaveLength(1);
+        expect(v2[0].extra).toEqual({ feePayer: config.solanaFacilitatorAddress });
+        expect(response.body.signers['solana:*']).toEqual([config.solanaFacilitatorAddress]);
       } finally {
         config.solanaFacilitatorAddress = priorAddress;
         config.solanaFacilitatorPrivateKey = priorPrivateKey;
+        config.solanaSvmExactEnabled = priorEnabled;
+        config.solanaSvmNetwork = priorNetwork;
       }
     });
   });
