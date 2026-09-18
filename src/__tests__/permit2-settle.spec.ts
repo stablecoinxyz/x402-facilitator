@@ -3,6 +3,7 @@ import request from 'supertest';
 import { settlePayment } from '../routes/settle';
 import { createBasePayment, createPaymentRequirements } from './fixtures/payment-fixtures';
 import { proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
+import { settleTotal } from '../lib/metrics';
 
 const simulateContract = jest.fn();
 const writeContract = jest.fn();
@@ -84,11 +85,17 @@ describe('Permit2 proxy settlement', () => {
 
   it('refuses to broadcast when the canonical proxy has no deployed bytecode', async () => {
     getCode.mockImplementation(({ address }: { address: string }) => Promise.resolve(address.toLowerCase() === X402_PERMIT2_PROXY.toLowerCase() ? '0x' : '0x01'));
+    settleTotal.reset();
     const response = await request(app()).post('/settle').send({
       paymentPayload: createBasePayment(), paymentRequirements: createPaymentRequirements('eip155:8453'),
     });
     expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_proxy_unavailable' });
     expect(simulateContract).not.toHaveBeenCalled();
     expect(writeContract).not.toHaveBeenCalled();
+    const metric = await settleTotal.get();
+    expect(metric.values).toContainEqual(expect.objectContaining({
+      labels: { network: 'eip155:8453', result: 'settlement_proxy_unavailable' },
+      value: 1,
+    }));
   });
 });

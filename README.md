@@ -156,7 +156,7 @@ Set `LOG_LEVEL` env var to control verbosity (`debug`, `info`, `warn`, `error`).
 | Metric | Type | Labels |
 |--------|------|--------|
 | `x402_verify_total` | Counter | `network`, `result` (valid/invalid/bad_request/rpc_error/unknown) |
-| `x402_settle_total` | Counter | `network`, `result` (success/failed/settlement_pending/settlement_disabled/replay/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown; `expired` is a legacy label no live path emits — see [grafana/README.md](./grafana/README.md#settle-result-labels)) |
+| `x402_settle_total` | Counter | `network`, `result` (success/failed/settlement_pending/settlement_disabled/settlement_proxy_unavailable/replay/bad_request/insufficient_allowance/nonce_conflict/gas_error/invalid_signature/tx_reverted/rpc_error/receipt_timeout/unknown; `expired` is a legacy label no live path emits — see [grafana/README.md](./grafana/README.md#settle-result-labels)) |
 | `x402_verify_duration_seconds` | Histogram | `network` |
 | `x402_settle_duration_seconds` | Histogram | `network` |
 | Default process metrics | — | CPU, memory, event loop lag |

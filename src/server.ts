@@ -10,6 +10,7 @@ import { verifyPayment } from './routes/verify';
 import { settlePayment, resolveSettlementMode } from './routes/settle';
 import { getSupportedNetworks } from './routes/supported';
 import { homePage } from './routes/home';
+import { healthCheck } from './routes/health';
 
 const app = express();
 
@@ -36,13 +37,7 @@ app.get('/metrics', metricsHandler);
 app.get('/', homePage);
 
 // Health check
-app.get('/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'SBC x402 Facilitator',
-    settlement: resolveSettlementMode(),
-  });
-});
+app.get('/health', healthCheck);
 
 // x402 Facilitator endpoints
 app.get('/supported', getSupportedNetworks);
