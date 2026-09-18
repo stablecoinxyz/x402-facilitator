@@ -156,7 +156,7 @@ The automated test suite covers:
 | Base Sepolia   | `eip155:84532`                            | Permit2 + canonical x402 proxy | ✓ Live |
 | Radius mainnet | `eip155:723487`                            | Permit2 + canonical x402 proxy | ✓ Live |
 | Radius testnet | `eip155:72344`                            | Permit2 + canonical x402 proxy | ✓ Live |
-| Solana mainnet | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Payer-signed SVM Exact + fee sponsor | ✓ Live |
+| Solana mainnet | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Delegated SPL transfer         | ✓ Live |
 
 ---
 
@@ -169,7 +169,7 @@ These are additive/non-breaking fields we include beyond the spec:
 | `remainingSeconds` | `/verify` | Seconds until the Permit2 `deadline` — helps resource servers decide settle timing |
 | Pre-settle deadline check | `/settle` | Rejects authorizations past `deadline` before broadcast |
 | Proxy simulation | `/settle` | Simulates the canonical Permit2 proxy call immediately before broadcast (skipped on Radius) |
-| Replay protection | `/settle` | Solana submits one immutable payer-signed transaction and keeps a short in-flight dedup cache; live EVM Permit2 relies on the on-chain nonce |
+| Nonce replay protection | `/settle` | Server-side dedup on Solana and simulated EVM; live EVM Permit2 relies on the on-chain Permit2 nonce |
 | Rate limiting | `/verify`, `/settle` | 60 req/min per IP with `429` + `Retry-After` header |
 | Input size limit | All POST | 100kb body limit with `413 payload_too_large` response |
 | HTML content negotiation | `/supported` | Returns HTML view when `Accept: text/html` header present |
