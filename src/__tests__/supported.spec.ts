@@ -123,7 +123,7 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       }
     });
 
-    it('advertises standard SVM Exact with its configured fee payer', async () => {
+    it('does not advertise Solana even when its keys are configured, pending durable replay storage', async () => {
       const priorAddress = config.solanaFacilitatorAddress;
       const priorPrivateKey = config.solanaFacilitatorPrivateKey;
       config.solanaFacilitatorAddress = '2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K';
@@ -132,10 +132,9 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       try {
         const response = await request(app).get('/supported');
         const { v2, v1 } = kindsFor(response.body, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'solana-mainnet-beta');
-        expect(v2).toHaveLength(1);
-        expect(v1).toHaveLength(1);
-        expect(v2[0].extra).toMatchObject({ assetTransferMethod: 'svm-exact', feePayer: config.solanaFacilitatorAddress });
-        expect(response.body.signers['solana:*']).toEqual([config.solanaFacilitatorAddress]);
+        expect(v2).toHaveLength(0);
+        expect(v1).toHaveLength(0);
+        expect(response.body.signers['solana:*']).toBeUndefined();
       } finally {
         config.solanaFacilitatorAddress = priorAddress;
         config.solanaFacilitatorPrivateKey = priorPrivateKey;
