@@ -100,7 +100,7 @@ All `invalidReason` / `errorReason` values follow the x402 v2 spec naming conven
 | --- | --- |
 | `unsupported_scheme` | Scheme is not `"exact"` |
 | `invalid_network` | CAIP-2 network not supported |
-| `invalid_payload` | Missing or malformed payload; `accepted` does not mirror `paymentRequirements`; or a malformed `eip2612GasSponsoring` sponsorship |
+| `invalid_payload` | Missing or malformed payload; `accepted` does not mirror `paymentRequirements`; non-string `extra.name` / `extra.version`; or a malformed `eip2612GasSponsoring` sponsorship (its `amount` must equal the exact payment amount and its `deadline` must be at least the Permit2 `deadline`) |
 | `invalid_exact_evm_payload_signature` | Permit2 witness or optional ERC-2612 sponsorship signature verification failed |
 | `invalid_exact_evm_payload_authorization_valid_before` | Authorization expired (`now > deadline`) |
 | `invalid_exact_evm_payload_authorization_valid_after` | Authorization not yet valid (`now < witness.validAfter`) |
@@ -111,6 +111,7 @@ All `invalidReason` / `errorReason` values follow the x402 v2 spec naming conven
 | `invalid_self_payment` | Payer (`from`) and recipient (`witness.to`) are the same address |
 | `insufficient_funds` | On-chain token balance too low |
 | `PERMIT2_ALLOWANCE_REQUIRED` | `/verify` only, returned with HTTP **412**: the payer must approve Permit2 on-chain (or include an `eip2612GasSponsoring` extension) before settlement |
+| `settlement_proxy_unavailable` | `/settle` in real mode only: the canonical x402 Permit2 proxy has no deployed bytecode on the target chain, so settlement is refused before broadcast. Carries an empty `transaction` |
 | `settlement_pending` | Settlement broadcast, confirmation unreadable. **Non-terminal** — the caller reconciles on chain rather than re-signing. Always carries the broadcast hash in `transaction`, as the spec requires |
 | `invalid_transaction_state` | Transaction mined and reverted. Carries the hash |
 

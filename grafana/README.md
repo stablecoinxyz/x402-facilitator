@@ -130,7 +130,7 @@ That is normal and does not mean logs are being discarded.
 | Result | Meaning | Severity |
 |--------|---------|----------|
 | `success` | Settlement completed on-chain | OK |
-| `failed` | Known bad input (malformed or non-Permit2 payload, unsupported network) | Expected |
+| `failed` | Known bad input (malformed or non-Permit2 payload, unsupported network, unconfigured asset, or a self-payment where payer equals recipient) | Expected |
 | `settlement_pending` | Broadcast succeeded but the receipt could not be read. Carries the tx hash — reconcile on chain. Pages (money may have moved) | Investigate |
 | `settlement_disabled` | Neither `ENABLE_REAL_SETTLEMENT` nor `ALLOW_SIMULATED_SETTLEMENT` is set — a misconfigured deploy refusing every settle. Pages | Investigate |
 | `settlement_proxy_unavailable` | The canonical x402 Permit2 proxy has no deployed bytecode on the target chain — a misconfigured chain refusing every Permit2 settle before broadcast. Pages | Investigate |
@@ -141,7 +141,7 @@ That is normal and does not mean logs are being discarded.
 | `insufficient_allowance` | Token allowance insufficient at transfer time | Investigate |
 | `nonce_conflict` | Tx nonce collision (concurrent settlements) | Investigate |
 | `gas_error` | Insufficient gas or gas price too low | Investigate |
-| `invalid_signature` | ECDSA signature invalid on-chain | Client error |
+| `invalid_signature` | Permit2 witness or ERC-2612 sponsor signature failed off-chain verification before broadcast, or an on-chain ECDSA signature check reverted | Client error |
 | `tx_reverted` | Contract call reverted (generic) | Investigate |
 | `rpc_error` | RPC timeout or connection failure | Infra issue |
 | `receipt_timeout` | Tx submitted but receipt never found | Infra issue |

@@ -43,7 +43,7 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
 | `GET` | `/supported` | Capability discovery — returns `kinds`, `extensions`, `signers` |
 | `POST` | `/verify` | Verify a `paymentPayload` (v2 JSON object) |
 | `POST` | `/settle` | Execute on-chain settlement |
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Liveness plus the resolved settlement mode (`real`/`simulated`/`disabled`); the bundled demo refuses to settle unless it reads `simulated` |
 
 ### v2 Request Format
 
@@ -87,7 +87,7 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
 }
 ```
 
-`payload.permit2Authorization` is the signed Permit2 witness. `spender` is the canonical x402 proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`), `permitted.token` is the asset, and `witness.to` is the merchant `payTo` — the proxy enforces `witness.to`, so the facilitator cannot redirect the payment. If the payer has not pre-approved Permit2 on-chain, add an `eip2612GasSponsoring` extension under `extensions` carrying a signed SBC ERC-2612 permit. Its `info` object holds `from`, `asset`, `spender` (the Permit2 contract `0x000000000022D473030F116dDEE9F6B43aC78BA3`), `amount`, `nonce`, `deadline`, `signature`, and `version: "1"`.
+`payload.permit2Authorization` is the signed Permit2 witness. `spender` is the canonical x402 proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`), `permitted.token` is the asset, and `witness.to` is the merchant `payTo` — the proxy enforces `witness.to`, so the facilitator cannot redirect the payment. If the payer has not pre-approved Permit2 on-chain, add an `eip2612GasSponsoring` extension under `extensions` carrying a signed SBC ERC-2612 permit. Its `info` object holds `from`, `asset`, `spender` (the Permit2 contract `0x000000000022D473030F116dDEE9F6B43aC78BA3`), `amount`, `nonce`, `deadline`, `signature`, and `version: "1"`. The sponsored `amount` must equal the exact payment amount (an over-broad allowance is rejected) and `deadline` must be at least the Permit2 authorization `deadline`.
 
 ## Configuration
 
@@ -100,14 +100,14 @@ The server auto-selects the next available port if `FACILITATOR_PORT` (default 3
 | `ENABLE_REAL_SETTLEMENT` | `ALLOW_SIMULATED_SETTLEMENT` | `/settle` behavior |
 |---|---|---|
 | `true` | any | Real on-chain settlement (production) |
-| not `true` | `true` | Simulated: no on-chain call, fabricated hash, response carries header `X-Settlement-Mode: simulated` (local development only) |
+| not `true` | `true` | Simulated: no on-chain call, fabricated hash, response carries header `X-Settlement-Mode: simulated` (local development and the bundled demo) |
 | not `true` | not `true` | Refuses: `success: false`, `errorReason: "settlement_disabled"` |
 
 Simulation is opt-in. A deployment with neither flag set refuses to settle rather than reporting a settlement that never happened.
 
 ## Demo
 
-Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain approval the facilitator needs, then sends a v2 verify + settle request.
+Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain Permit2 approval settlement needs, then sends a v2 verify + settle request.
 
 > **Safety:** `npm run setup` broadcasts a real ERC-20 `approve(Permit2, 100 SBC)` transaction and costs gas. It gives the facilitator no allowance, but gives Permit2 a standing 100 SBC allowance. Use `--network base-sepolia` for an investor demo unless the mainnet wallet is intentionally funded and approved. The generated configuration uses simulated settlement; the client refuses a real or unknown server unless `DEMO_ALLOW_REAL_SETTLEMENT=true` is explicitly set.
 >

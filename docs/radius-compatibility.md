@@ -62,6 +62,10 @@ Legacy transactions need one fee param (`gasPrice`), EIP-1559 needs two (`maxFee
 ```
 settle request for eip155:723487 or eip155:72344
   → isRadius = true
+  → getCode(token): refuse if the configured SBC token has no bytecode
+    (settlement_asset_unavailable; client sees unsupported_asset)
+  → getCode(x402 proxy): refuse if the canonical proxy has no bytecode
+    (settlement_proxy_unavailable)
   → skip proxy simulation on Radius
   → gasPrice = eth_gasPrice() + 1 gwei
   → writeContract settle() or settleWithPermit() on the x402 Permit2 proxy
