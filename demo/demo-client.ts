@@ -1,22 +1,12 @@
 import { createWalletClient, http } from 'viem';
-import { getAccount, getPublicClient, getNetwork, getViemChain, DATA_DIR } from './utils';
+import { getAccount, getNetwork, getViemChain, DATA_DIR } from './utils';
+import { randomBytes } from 'crypto';
+import { PERMIT2_ADDRESS, X402_PERMIT2_PROXY, permit2WitnessTypes } from '../src/evm/permit2';
 import fs from 'fs';
 import path from 'path';
 
-// Minimal ABI for nonces()
-const NONCES_ABI = [
-  {
-    inputs: [{ name: 'owner', type: 'address' }],
-    name: 'nonces',
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function'
-  }
-] as const;
-
 async function runDemo() {
   const network = getNetwork();
-  const publicClient = getPublicClient(network);
   const chain = getViemChain(network);
 
   console.log(`🚀 Starting x402 Facilitator Demo Client (${network.name}) — v2 Protocol`);
@@ -48,44 +38,28 @@ async function runDemo() {
 
   console.log(`\n💰 Payment: 0.01 SBC (${amount} units, ${network.sbcDecimals} decimals)`);
 
-  // 2. Read on-chain nonce for ERC-2612 permit
-  console.log('\n🔍 Reading on-chain permit nonce...');
+  // 2. Permit2 SignatureTransfer nonces are unordered.  A fresh 256-bit nonce
+  // lets the payer authorize this exact payment without a mutable local counter.
+  const nonce = BigInt(`0x${randomBytes(32).toString('hex')}`);
+  console.log(`\n🔍 Generated Permit2 nonce: ${nonce}`);
 
-  const nonce = await publicClient.readContract({
-    address: network.sbcAddress,
-    abi: NONCES_ABI,
-    functionName: 'nonces',
-    args: [client.address]
-  });
-
-  console.log(`   Nonce: ${nonce}`);
-
-  // 3. Sign ERC-2612 Permit
-  console.log('\n📝 Signing ERC-2612 Permit...');
+  // 3. Sign the official Permit2 witness.  The witness binds the merchant;
+  // the canonical x402 proxy is the only allowed spender.
+  console.log('\n📝 Signing Permit2 witness...');
 
   const domain = {
-    name: network.extra.name,
-    version: network.extra.version,
+    name: 'Permit2',
     chainId: network.chainId,
-    verifyingContract: network.sbcAddress,
+    verifyingContract: PERMIT2_ADDRESS,
   } as const;
 
-  const types = {
-    Permit: [
-      { name: 'owner', type: 'address' },
-      { name: 'spender', type: 'address' },
-      { name: 'value', type: 'uint256' },
-      { name: 'nonce', type: 'uint256' },
-      { name: 'deadline', type: 'uint256' },
-    ],
-  } as const;
-
-  const permitMessage = {
-    owner: client.address,
-    spender: facilitator.address,
-    value: BigInt(amount),
-    nonce: BigInt(nonce),
+  const permit2Authorization = {
+    permitted: { token: network.sbcAddress, amount },
+    from: client.address,
+    spender: X402_PERMIT2_PROXY,
+    nonce: nonce.toString(),
     deadline: BigInt(deadline),
+    witness: { to: merchant.address, validAfter: 0n },
   } as const;
 
   const clientWallet = createWalletClient({
@@ -96,9 +70,9 @@ async function runDemo() {
 
   const signature = await clientWallet.signTypedData({
     domain,
-    types,
-    primaryType: 'Permit',
-    message: permitMessage
+    types: permit2WitnessTypes,
+    primaryType: 'PermitWitnessTransferFrom',
+    message: permit2Authorization
   });
 
   console.log(`   Signature: ${signature.substring(0, 10)}...`);
@@ -112,16 +86,17 @@ async function runDemo() {
     accepted: {
       scheme: 'exact',
       network: network.networkId,
+      amount,
+      asset: network.sbcAddress,
+      payTo: merchant.address,
+      extra: network.extra,
     },
     payload: {
       signature,
-      authorization: {
-        from: client.address,
-        to: facilitator.address,
-        value: amount,
-        validAfter: '0',
-        validBefore: deadline,
-        nonce: nonce.toString(),
+      permit2Authorization: {
+        ...permit2Authorization,
+        deadline,
+        witness: { to: merchant.address, validAfter: '0' },
       },
     },
     extensions: {},
@@ -141,6 +116,16 @@ async function runDemo() {
   console.log(`\n🔍 Sending VERIFICATION request to ${facilitatorUrl}/verify...`);
 
   try {
+    // Refuse to send a settlement request to a real or unknown server unless
+    // the operator has deliberately opted into moving funds.
+    const healthRes = await fetch(`${facilitatorUrl}/health`);
+    const health = await healthRes.json() as { settlement?: string };
+    if (!healthRes.ok || (health.settlement !== 'simulated' && process.env.DEMO_ALLOW_REAL_SETTLEMENT !== 'true')) {
+      console.error('\n❌ Refusing to settle: the facilitator is not in simulated demo mode.');
+      console.error('   Set ALLOW_SIMULATED_SETTLEMENT=true on the server, or explicitly set DEMO_ALLOW_REAL_SETTLEMENT=true to allow a real transfer.');
+      return;
+    }
+
     const verifyRes = await fetch(`${facilitatorUrl}/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -176,10 +161,15 @@ async function runDemo() {
       console.log('   Response:', JSON.stringify(settleResult, null, 2));
 
       if (settleResult.success) {
-          console.log('\n🎉 SUCCESS: Payment Settled!');
-          console.log(`   Transaction Hash: ${settleResult.transaction}`);
-          if (network.explorerTxUrl) {
-            console.log(`   Explorer: ${network.explorerTxUrl}${settleResult.transaction}`);
+          if (settleRes.headers.get('x-settlement-mode') === 'simulated') {
+            console.log('\n🎬 SIMULATED PAYMENT — no funds moved');
+            console.log(`   Demo reference: ${settleResult.transaction}`);
+          } else {
+            console.log('\n🎉 SUCCESS: Payment Settled!');
+            console.log(`   Transaction Hash: ${settleResult.transaction}`);
+            if (network.explorerTxUrl) {
+              console.log(`   Explorer: ${network.explorerTxUrl}${settleResult.transaction}`);
+            }
           }
       } else {
           console.log('\n❌ FAILURE: Settlement failed.');

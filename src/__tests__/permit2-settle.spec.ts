@@ -2,7 +2,7 @@ import express from 'express';
 import request from 'supertest';
 import { settlePayment } from '../routes/settle';
 import { createBasePayment, createPaymentRequirements } from './fixtures/payment-fixtures';
-import { X402_PERMIT2_PROXY } from '../evm/permit2';
+import { proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
 
 const simulateContract = jest.fn();
 const writeContract = jest.fn();
@@ -41,6 +41,10 @@ describe('Permit2 proxy settlement', () => {
   });
   afterAll(() => { if (previous === undefined) delete process.env.ENABLE_REAL_SETTLEMENT; else process.env.ENABLE_REAL_SETTLEMENT = previous; });
 
+  it('declares empty outputs for proxy transactions so Base preflight can decode success', () => {
+    expect(proxyAbi.every((fn) => Array.isArray(fn.outputs) && fn.outputs.length === 0)).toBe(true);
+  });
+
   it('simulates then sends exactly one canonical proxy settlement', async () => {
     const response = await request(app()).post('/settle').send({
       paymentPayload: createBasePayment(), paymentRequirements: createPaymentRequirements('eip155:8453'),
@@ -64,5 +68,14 @@ describe('Permit2 proxy settlement', () => {
       paymentPayload: createBasePayment(), paymentRequirements: createPaymentRequirements('eip155:8453'),
     });
     expect(response.body).toMatchObject({ success: false, errorReason: 'invalid_transaction_state', transaction: HASH });
+  });
+
+  it('rejects unknown requirements metadata before ledger or RPC work', async () => {
+    const requirements: any = createPaymentRequirements('eip155:8453');
+    requirements.extra.unrecognizedExecutionFlag = 'true';
+    const response = await request(app()).post('/settle').send({ paymentPayload: createBasePayment(), paymentRequirements: requirements });
+    expect(response.body).toMatchObject({ success: false, errorReason: 'invalid_payload' });
+    expect(simulateContract).not.toHaveBeenCalled();
+    expect(writeContract).not.toHaveBeenCalled();
   });
 });

@@ -37,7 +37,13 @@ app.get('/', homePage);
 
 // Health check
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'SBC x402 Facilitator' });
+  res.json({
+    status: 'ok',
+    service: 'SBC x402 Facilitator',
+    settlement: process.env.ENABLE_REAL_SETTLEMENT === 'true'
+      ? 'real'
+      : (process.env.ALLOW_SIMULATED_SETTLEMENT === 'true' ? 'simulated' : 'disabled'),
+  });
 });
 
 // x402 Facilitator endpoints

@@ -33,7 +33,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     sbcDecimals: 18,
     networkId: "eip155:8453",
     explorerTxUrl: "https://basescan.org/tx/",
-    extra: { assetTransferMethod: "erc2612", name: "Stable Coin", version: "1" },
+    extra: { assetTransferMethod: "permit2", name: "Stable Coin", version: "1" },
   },
   "base-sepolia": {
     name: "Base Sepolia (Testnet)",
@@ -44,7 +44,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     sbcDecimals: 6,
     networkId: "eip155:84532",
     explorerTxUrl: "https://sepolia.basescan.org/tx/",
-    extra: { assetTransferMethod: "erc2612", name: "Stable Coin", version: "1" },
+    extra: { assetTransferMethod: "permit2", name: "Stable Coin", version: "1" },
   },
   radius: {
     name: "Radius (Mainnet)",
@@ -55,7 +55,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     sbcDecimals: 6,
     networkId: "eip155:723487",
     explorerTxUrl: null,
-    extra: { assetTransferMethod: "erc2612", name: "Stable Coin", version: "1" },
+    extra: { assetTransferMethod: "permit2", name: "Stable Coin", version: "1" },
   },
   "radius-testnet": {
     name: "Radius (Testnet)",
@@ -66,7 +66,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     sbcDecimals: 6,
     networkId: "eip155:72344",
     explorerTxUrl: "https://testnet.radiustech.xyz/testnet/explorer?view=tx-details&hash=",
-    extra: { assetTransferMethod: "erc2612", name: "Stable Coin", version: "1" },
+    extra: { assetTransferMethod: "permit2", name: "Stable Coin", version: "1" },
   },
 };
 

@@ -109,12 +109,14 @@ Simulation is opt-in. A deployment with neither flag set refuses to settle rathe
 
 Interactive demo using SBC tokens. Generates wallets, checks balances, grants the on-chain approval the facilitator needs, then sends a v2 verify + settle request.
 
-> **Note:** the bundled demo client (`demo/`), the mainnet smoke script (`scripts/smoke-mainnet.ts`), and the conformance harness (`src/__tests__/conformance.ts`) still build legacy ERC-2612 EVM payloads, which the migrated facilitator now rejects with `unsupported_asset_transfer_method` / `invalid_payload`. `npm run demo` and `npm run conformance` against a Permit2 EVM endpoint fail until those clients are migrated to the Permit2 witness. The Solana smoke scripts (`scripts/smoke-solana-*.ts`) are unaffected. The Permit2 flow described below is the target shape.
+> **Safety:** `npm run setup` broadcasts a real ERC-20 `approve(Permit2, 100 SBC)` transaction and costs gas. It gives the facilitator no allowance, but gives Permit2 a standing 100 SBC allowance. Use `--network base-sepolia` for an investor demo unless the mainnet wallet is intentionally funded and approved. The generated configuration uses simulated settlement; the client refuses a real or unknown server unless `DEMO_ALLOW_REAL_SETTLEMENT=true` is explicitly set.
+>
+> The bundled demo client uses the standard Exact EVM Permit2 witness flow. The mainnet smoke script (`scripts/smoke-mainnet.ts`) and conformance harness (`src/__tests__/conformance.ts`) still need their own Permit2 migration. The Solana smoke scripts (`scripts/smoke-solana-*.ts`) are unaffected. Radius and Radius testnet are not investor-demo targets until the canonical Permit2 and x402 proxy deployments have been bytecode-verified and a real testnet settlement has passed.
 
 ```bash
 npm run setup -- --network <name>   # generate wallets, approve, write .env
-npm run dev                          # start server (Terminal 1)
-npm run demo -- --network <name>    # run demo client (Terminal 2)
+npm run dev                          # starts the facilitator in simulated demo mode
+npm run demo -- --network <name>     # signs, verifies, and simulates a payment
 ```
 
 **Networks:** `base` (default), `base-sepolia`, `radius`, `radius-testnet`
