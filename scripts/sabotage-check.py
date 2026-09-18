@@ -60,8 +60,8 @@ MUTATIONS = [
     (
         "Solana ignores the settlement kill switch",
         "src/routes/settle.ts",
-        "      if (solanaMode === 'disabled') {",
-        "      if ((false as boolean)) {",
+        "      if (solanaMode === 'disabled') {\n        log.error({ payer: solanaOwner, network, errorReason: 'settlement_disabled' }, 'Settlement refused: ENABLE_REAL_SETTLEMENT is not \"true\" and ALLOW_SIMULATED_SETTLEMENT is not set');",
+        "      if ((false as boolean)) {\n        log.error({ payer: solanaOwner, network, errorReason: 'settlement_disabled' }, 'Settlement refused: ENABLE_REAL_SETTLEMENT is not \"true\" and ALLOW_SIMULATED_SETTLEMENT is not set');",
         ["src/__tests__/solana-settle-auth.spec.ts", "-t", "kill switch"],
     ),
     (
