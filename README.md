@@ -104,7 +104,7 @@ The server auto-selects the next available port if `FACILITATOR_PORT` (default 3
 
 Simulation is opt-in. A deployment with neither flag set refuses to settle rather than reporting a settlement that never happened.
 
-`ENABLE_REAL_SETTLEMENT=true` enables real EVM settlement only. Real Solana settlement returns `solana_durability_unavailable` until its durable replay ledger is implemented; it is therefore absent from `/supported` even if Solana keys are configured.
+`ENABLE_REAL_SETTLEMENT=true` enables real EVM settlement. Standard x402 SVM Exact is separately disabled by default: it requires both `SOLANA_SVM_EXACT_ENABLED=true` and an explicit `SOLANA_SVM_NETWORK` (`solana-devnet`, `solana-testnet`, or `solana`). This prevents configured Solana keys from exposing a capability accidentally. Start with a funded devnet payment; only then make a deliberate mainnet rollout. The legacy delegated-SPL method remains disabled and is never advertised.
 
 ## Demo
 

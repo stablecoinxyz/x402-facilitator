@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { createPublicClient, http, verifyTypedData } from 'viem';
 import type { Logger } from 'pino';
-import { config, resolveToken, toCaip2Network } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
+import { getExactSvmScheme } from '../solana/svm-exact';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
 import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, PERMIT2_ADDRESS } from '../evm/permit2';
@@ -235,6 +236,17 @@ export async function verifyPayment(req: Request, res: Response) {
     if (network?.startsWith('solana:')) {
       log.debug({ network }, 'Solana payment detected');
       try {
+        if (typeof paymentPayload.payload?.transaction === 'string') {
+          const configuredNetwork = getSolanaSvmNetwork();
+          if (!isSolanaSvmExactEnabled() || network !== configuredNetwork?.caip2) {
+            verifyTotal.inc({ network, result: 'invalid' });
+            return res.json({ isValid: false, payer: 'unknown', invalidReason: 'solana_svm_exact_disabled' });
+          }
+          const result = await (await getExactSvmScheme()).verify(paymentPayload, paymentRequirements);
+          verifyTotal.inc({ network, result: result.isValid ? 'valid' : 'invalid' });
+          recordDuration(startTime, network);
+          return res.json(result);
+        }
         const result = await verifySolanaPayment(paymentPayload.payload, paymentRequirements, log);
         verifyTotal.inc({ network, result: result.isValid ? 'valid' : 'invalid' });
         recordDuration(startTime, network);

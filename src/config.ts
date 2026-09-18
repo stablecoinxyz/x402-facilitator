@@ -42,16 +42,36 @@ export const config = {
   radiusTestnetSbcTokenAddress: process.env.RADIUS_TESTNET_SBC_TOKEN_ADDRESS || '0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb',
   radiusTestnetSbcDecimals: parseInt(process.env.RADIUS_TESTNET_SBC_DECIMALS || '6'),
 
-  // Solana Configuration
+  // Solana Configuration. SVM Exact is intentionally an explicit opt-in: keys
+  // alone never expose a settlement capability.
   solanaRpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
   solanaFacilitatorPrivateKey: process.env.SOLANA_FACILITATOR_PRIVATE_KEY || process.env.FACILITATOR_SOLANA_PRIVATE_KEY || '',
   solanaFacilitatorAddress: process.env.SOLANA_FACILITATOR_ADDRESS || process.env.FACILITATOR_SOLANA_ADDRESS || '',
+  solanaSvmExactEnabled: process.env.SOLANA_SVM_EXACT_ENABLED === 'true',
+  solanaSvmNetwork: process.env.SOLANA_SVM_NETWORK || '',
   sbcTokenAddress: process.env.SBC_TOKEN_ADDRESS || 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
   sbcDecimals: 9,
 };
 
 /** CAIP-2 identifier for Solana mainnet (truncated genesis hash). */
 export const SOLANA_MAINNET_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+export const SOLANA_DEVNET_CAIP2 = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+export const SOLANA_TESTNET_CAIP2 = 'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z';
+
+export const SOLANA_SVM_NETWORKS: Record<string, { caip2: string; v1: string; cluster: 'mainnet' | 'devnet' | 'testnet' }> = {
+  [SOLANA_MAINNET_CAIP2]: { caip2: SOLANA_MAINNET_CAIP2, v1: 'solana', cluster: 'mainnet' },
+  [SOLANA_DEVNET_CAIP2]: { caip2: SOLANA_DEVNET_CAIP2, v1: 'solana-devnet', cluster: 'devnet' },
+  [SOLANA_TESTNET_CAIP2]: { caip2: SOLANA_TESTNET_CAIP2, v1: 'solana-testnet', cluster: 'testnet' },
+};
+
+export function getSolanaSvmNetwork() {
+  return SOLANA_SVM_NETWORKS[toCaip2Network(config.solanaSvmNetwork)];
+}
+
+/** True only when an operator deliberately selects a supported SVM network. */
+export function isSolanaSvmExactEnabled(): boolean {
+  return config.solanaSvmExactEnabled && Boolean(getSolanaSvmNetwork());
+}
 
 /**
  * x402 v1 identifies networks by plain name ("base"); v2 uses CAIP-2 ("eip155:8453").
@@ -69,11 +89,13 @@ const V1_NETWORK_TO_CAIP2: Record<string, string> = {
   'radius': `eip155:${config.radiusChainId}`,
   'radius-testnet': `eip155:${config.radiusTestnetChainId}`,
   'solana-mainnet-beta': SOLANA_MAINNET_CAIP2,
+  'solana': SOLANA_MAINNET_CAIP2,
+  'solana-devnet': SOLANA_DEVNET_CAIP2,
+  'solana-testnet': SOLANA_TESTNET_CAIP2,
 };
 
 /** Additional inbound spellings we accept but never advertise. */
 const V1_NETWORK_ALIASES: Record<string, string> = {
-  'solana': SOLANA_MAINNET_CAIP2,
   'solana-mainnet': SOLANA_MAINNET_CAIP2,
 };
 
@@ -129,6 +151,9 @@ export function resolveToken(chainId: number, asset: string): { address: string;
 // Validate Solana config (optional - only if Solana is being used)
 if (config.solanaFacilitatorPrivateKey && !config.solanaFacilitatorAddress) {
   throw new Error('SOLANA_FACILITATOR_ADDRESS is required for Solana');
+}
+if (config.solanaSvmExactEnabled && !getSolanaSvmNetwork()) {
+  throw new Error('SOLANA_SVM_NETWORK must explicitly be solana, solana-devnet, or solana-testnet when SOLANA_SVM_EXACT_ENABLED=true');
 }
 
 // Startup log is emitted by server.ts with structured logger

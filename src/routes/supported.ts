@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { config, toV1Network } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network } from '../config';
 
 /**
  * GET /supported - x402 V2 Capability Discovery
@@ -12,7 +12,7 @@ export function getSupportedNetworks(req: Request, res: Response) {
     x402Version: number;
     scheme: string;
     network: string;
-    extra: { assetTransferMethod: string; name: string; version: string };
+    extra: Record<string, unknown>;
   }> = [];
 
   // Collect configured signer addresses keyed by CAIP-2 namespace
@@ -22,7 +22,7 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // v2 advertises CAIP-2; v1 advertises the plain name, because that is what a v1
   // client will send back in paymentRequirements.network. Advertising CAIP-2 on a
   // v1 kind gives the client an identifier its own spec doesn't allow it to use.
-  function addKind(network: string, extra: { assetTransferMethod: string; name: string; version: string }, includeV1 = true) {
+  function addKind(network: string, extra: Record<string, unknown>, includeV1 = true) {
     kinds.push({ x402Version: 2, scheme: 'exact', network, extra });
     const v1Name = toV1Network(network);
     if (includeV1 && v1Name) {
@@ -56,12 +56,14 @@ export function getSupportedNetworks(req: Request, res: Response) {
     addSigner(signers, 'eip155:*', config.radiusTestnetFacilitatorAddress);
   }
 
-  // Deliberately do not advertise Solana.  Its delegated SPL transfer uses a
-  // signed message whose nonce is not consumed on-chain; until a shared,
-  // durable broadcast ledger is present, a restart after an uncertain
-  // broadcast could otherwise pay the same authorization twice.  The route
-  // also fails closed for real Solana settlement.  Keeping this out of
-  // capability discovery prevents clients from selecting an unsafe path.
+  // Standard SVM Exact is opt-in on an explicit network. The payer signs the
+  // complete transaction; this service can only add its fee-payer signature.
+  // The legacy delegated-SPL method is never advertised.
+  const solanaNetwork = getSolanaSvmNetwork();
+  if (isSolanaSvmExactEnabled() && solanaNetwork && config.solanaFacilitatorAddress && config.solanaFacilitatorPrivateKey) {
+    addKind(solanaNetwork.caip2, { feePayer: config.solanaFacilitatorAddress });
+    addSigner(signers, 'solana:*', config.solanaFacilitatorAddress);
+  }
 
   // SupportedResponse advertises extension identifiers. The extension's schema
   // and client data live in the PaymentRequired/PAYMENT-SIGNATURE envelopes.
@@ -85,15 +87,20 @@ const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
   'eip155:723487': { name: 'Radius', type: 'Mainnet' },
   'eip155:72344': { name: 'Radius', type: 'Testnet' },
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { name: 'Solana', type: 'Mainnet' },
+  'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1': { name: 'Solana Devnet', type: 'Testnet' },
+  'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z': { name: 'Solana Testnet', type: 'Testnet' },
   'base': { name: 'Base', type: 'Mainnet' },
   'base-sepolia': { name: 'Base Sepolia', type: 'Testnet' },
   'radius': { name: 'Radius', type: 'Mainnet' },
   'radius-testnet': { name: 'Radius', type: 'Testnet' },
   'solana-mainnet-beta': { name: 'Solana', type: 'Mainnet' },
+  'solana': { name: 'Solana', type: 'Mainnet' },
+  'solana-devnet': { name: 'Solana Devnet', type: 'Testnet' },
+  'solana-testnet': { name: 'Solana Testnet', type: 'Testnet' },
 };
 
 function renderSupportedHTML(data: {
-  kinds: Array<{ x402Version: number; scheme: string; network: string; extra: { assetTransferMethod: string; name: string; version: string } }>;
+  kinds: Array<{ x402Version: number; scheme: string; network: string; extra: Record<string, unknown> }>;
   extensions: unknown[];
   signers: Record<string, string[]>;
 }) {
@@ -109,8 +116,9 @@ function renderSupportedHTML(data: {
         <div class="card-rows">
           <div class="row"><span class="label">${k.network.includes(':') ? 'CAIP-2' : 'Network'}</span><code>${k.network}</code></div>
           <div class="row"><span class="label">Scheme</span><span>${k.scheme}</span></div>
-          <div class="row"><span class="label">Transfer</span><span>${k.extra.assetTransferMethod}</span></div>
-          <div class="row"><span class="label">Token</span><span>${k.extra.name} v${k.extra.version}</span></div>
+          ${k.extra.assetTransferMethod ? `<div class="row"><span class="label">Transfer</span><span>${k.extra.assetTransferMethod}</span></div>` : ''}
+          ${k.extra.name ? `<div class="row"><span class="label">Token</span><span>${k.extra.name} v${k.extra.version}</span></div>` : ''}
+          ${k.extra.feePayer ? `<div class="row"><span class="label">Fee payer</span><code>${k.extra.feePayer}</code></div>` : ''}
           <div class="row"><span class="label">x402</span><span>v${k.x402Version}</span></div>
         </div>
       </div>`;

@@ -2,9 +2,10 @@ import { Request, Response } from 'express';
 import { createWalletClient, createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
-import { config, resolveToken, toCaip2Network } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { verifySolanaPayment } from '../solana/verify';
+import { getExactSvmScheme } from '../solana/svm-exact';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
@@ -250,6 +251,38 @@ export async function settlePayment(req: Request, res: Response) {
     // Route by network — Solana uses CAIP-2 "solana:..." prefix
     if (network?.startsWith('solana:')) {
       log.debug({ network }, 'Solana settlement (delegated transfer)');
+
+      if (typeof paymentPayload.payload?.transaction === 'string') {
+        const configuredNetwork = getSolanaSvmNetwork();
+        if (!isSolanaSvmExactEnabled() || network !== configuredNetwork?.caip2) {
+          settleTotal.inc({ network, result: 'solana_svm_exact_disabled' });
+          return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'solana_svm_exact_disabled' });
+        }
+        const solanaMode = resolveSettlementMode();
+        if (solanaMode === 'disabled') {
+          settleTotal.inc({ network, result: 'settlement_disabled' });
+          return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'settlement_disabled' });
+        }
+        try {
+          const svm = await getExactSvmScheme();
+          const verified = await svm.verify(paymentPayload, paymentRequirements);
+          if (!verified.isValid) {
+            settleTotal.inc({ network, result: 'failed' });
+            return res.json({ success: false, payer: verified.payer || 'unknown', transaction: '', network, errorReason: verified.invalidReason || 'invalid_payment' });
+          }
+          if (solanaMode === 'simulated') {
+            res.set('X-Settlement-Mode', 'simulated');
+            return res.json({ success: true, payer: verified.payer || 'unknown', transaction: `SIMULATED${Date.now()}`, network });
+          }
+          const settled = await svm.settle(paymentPayload, paymentRequirements);
+          settleTotal.inc({ network, result: settled.success ? 'success' : 'failed' });
+          return res.json(settled);
+        } catch (error: any) {
+          log.warn({ err: error, network }, 'SVM Exact settlement rejected');
+          settleTotal.inc({ network, result: 'failed' });
+          return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'invalid_exact_svm_payload' });
+        }
+      }
 
       // /settle validates the payment itself. It cannot lean on /verify: the spec
       // defines flows (upfront, escrow) where /verify never runs, and even in the
