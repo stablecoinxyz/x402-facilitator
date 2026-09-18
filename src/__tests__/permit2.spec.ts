@@ -9,9 +9,17 @@ function requirements(overrides: any = {}) { return { amount: '100', asset: toke
 function payload(overrides: any = {}) { return { signature, permit2Authorization: { permitted: { token, amount: '100' }, from: payer, spender: X402_PERMIT2_PROXY, nonce: '7', deadline: String(Math.floor(Date.now() / 1000) + 300), witness: { to: merchant, validAfter: '0' }, ...overrides }, extensions: {} }; }
 
 describe('official x402 Permit2 payload binding', () => {
-  it('rejects unknown execution metadata rather than omitting it from identity', () => {
+  it('ignores unknown optional requirement metadata (forward-compatible)', () => {
     const req = requirements({ extra: { assetTransferMethod: 'permit2', unrecognizedExecutionFlag: 'true' } });
-    expect(parsePermit2(payload(), req)).toMatchObject({ ok: false, reason: 'invalid_payload' });
+    expect(parsePermit2(payload(), req).ok).toBe(true);
+  });
+  it('rejects a non-permit2 asset transfer method', () => {
+    const req = requirements({ extra: { assetTransferMethod: 'erc3009' } });
+    expect(parsePermit2(payload(), req)).toMatchObject({ ok: false, reason: 'unsupported_asset_transfer_method' });
+  });
+  it('rejects missing extra as an unsupported asset transfer method', () => {
+    const req = requirements({ extra: undefined });
+    expect(parsePermit2(payload(), req)).toMatchObject({ ok: false, reason: 'unsupported_asset_transfer_method' });
   });
   it('rejects sponsorship allowance larger than the exact payment', () => {
     const p = payload();

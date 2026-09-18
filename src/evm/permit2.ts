@@ -55,7 +55,6 @@ export function parsePermit2(payload: any, requirements: any, extensions: any = 
   const auth = payload?.permit2Authorization;
   const payer = typeof auth?.from === 'string' ? auth.from : 'unknown';
   if (requirements?.extra?.assetTransferMethod !== 'permit2') return { ok: false, reason: 'unsupported_asset_transfer_method', payer };
-  if (!requirements?.extra || Object.keys(requirements.extra).some(key => !['assetTransferMethod', 'name', 'version'].includes(key))) return { ok: false, reason: 'invalid_payload', payer };
   if ((requirements.extra.name !== undefined && typeof requirements.extra.name !== 'string') || (requirements.extra.version !== undefined && typeof requirements.extra.version !== 'string')) return { ok: false, reason: 'invalid_payload', payer };
   if (!auth) return { ok: false, reason: 'invalid_payload', payer };
   if (!isSignature(payload?.signature)) return { ok: false, reason: 'invalid_exact_evm_payload_signature', payer };

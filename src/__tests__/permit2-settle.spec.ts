@@ -7,13 +7,14 @@ import { proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
 const simulateContract = jest.fn();
 const writeContract = jest.fn();
 const waitForTransactionReceipt = jest.fn();
+const getCode = jest.fn();
 
 jest.mock('viem', () => {
   const actual = jest.requireActual('viem');
   return {
     ...actual,
     verifyTypedData: jest.fn().mockResolvedValue(true),
-    createPublicClient: () => ({ getCode: jest.fn().mockResolvedValue('0x01'), simulateContract, waitForTransactionReceipt }),
+    createPublicClient: () => ({ getCode, simulateContract, waitForTransactionReceipt }),
     createWalletClient: () => ({ writeContract }),
   };
 });
@@ -38,6 +39,7 @@ describe('Permit2 proxy settlement', () => {
     simulateContract.mockReset().mockResolvedValue({});
     writeContract.mockReset().mockResolvedValue(HASH);
     waitForTransactionReceipt.mockReset().mockResolvedValue({ status: 'success' });
+    getCode.mockReset().mockResolvedValue('0x01');
   });
   afterAll(() => { if (previous === undefined) delete process.env.ENABLE_REAL_SETTLEMENT; else process.env.ENABLE_REAL_SETTLEMENT = previous; });
 
@@ -70,11 +72,22 @@ describe('Permit2 proxy settlement', () => {
     expect(response.body).toMatchObject({ success: false, errorReason: 'invalid_transaction_state', transaction: HASH });
   });
 
-  it('rejects unknown requirements metadata before ledger or RPC work', async () => {
+  it('settles when both sides carry the same unknown optional metadata', async () => {
     const requirements: any = createPaymentRequirements('eip155:8453');
     requirements.extra.unrecognizedExecutionFlag = 'true';
-    const response = await request(app()).post('/settle').send({ paymentPayload: createBasePayment(), paymentRequirements: requirements });
-    expect(response.body).toMatchObject({ success: false, errorReason: 'invalid_payload' });
+    const payment: any = createBasePayment();
+    payment.accepted.extra.unrecognizedExecutionFlag = 'true';
+    const response = await request(app()).post('/settle').send({ paymentPayload: payment, paymentRequirements: requirements });
+    expect(response.body).toMatchObject({ success: true, transaction: HASH });
+    expect(writeContract).toHaveBeenCalledWith(expect.objectContaining({ address: X402_PERMIT2_PROXY, functionName: 'settle' }));
+  });
+
+  it('refuses to broadcast when the canonical proxy has no deployed bytecode', async () => {
+    getCode.mockImplementation(({ address }: { address: string }) => Promise.resolve(address.toLowerCase() === X402_PERMIT2_PROXY.toLowerCase() ? '0x' : '0x01'));
+    const response = await request(app()).post('/settle').send({
+      paymentPayload: createBasePayment(), paymentRequirements: createPaymentRequirements('eip155:8453'),
+    });
+    expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_proxy_unavailable' });
     expect(simulateContract).not.toHaveBeenCalled();
     expect(writeContract).not.toHaveBeenCalled();
   });

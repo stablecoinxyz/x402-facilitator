@@ -31,7 +31,7 @@ type SettlementMode = 'real' | 'simulated' | 'disabled';
  * transfers. A kill switch that covers one of two chains reads as a kill switch
  * and is not one.
  */
-function resolveSettlementMode(): SettlementMode {
+export function resolveSettlementMode(): SettlementMode {
   if (process.env.ENABLE_REAL_SETTLEMENT === 'true') return 'real';
   if (process.env.ALLOW_SIMULATED_SETTLEMENT === 'true') return 'simulated';
   return 'disabled';
@@ -425,6 +425,11 @@ export async function settlePayment(req: Request, res: Response) {
     const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
     const tokenCode = await publicClient.getCode({ address: parsedPermit2.auth.permitted.token as `0x${string}` });
     if (!tokenCode || tokenCode === '0x') return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
+    const proxyCode = await publicClient.getCode({ address: X402_PERMIT2_PROXY });
+    if (!proxyCode || proxyCode === '0x') {
+      log.error({ payer: parsedPermit2.auth.from, network, proxy: X402_PERMIT2_PROXY, errorReason: 'settlement_proxy_unavailable' }, 'Settlement refused: canonical Permit2 proxy has no deployed bytecode');
+      return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'settlement_proxy_unavailable' });
+    }
     const permit = { permitted: { token: parsedPermit2.auth.permitted.token as `0x${string}`, amount: BigInt(parsedPermit2.auth.permitted.amount) }, nonce: BigInt(parsedPermit2.auth.nonce), deadline: BigInt(parsedPermit2.auth.deadline) };
     const witness = { to: parsedPermit2.auth.witness.to as `0x${string}`, validAfter: BigInt(parsedPermit2.auth.witness.validAfter) };
     const args: any = parsedPermit2.sponsor ? [{ value: BigInt(parsedPermit2.sponsor.amount), deadline: BigInt(parsedPermit2.sponsor.deadline), r: `0x${parsedPermit2.sponsor.signature.slice(2, 66)}`, s: `0x${parsedPermit2.sponsor.signature.slice(66, 130)}`, v: parseInt(parsedPermit2.sponsor.signature.slice(130), 16) }, permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`] : [permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`];
