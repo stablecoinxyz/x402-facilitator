@@ -106,6 +106,7 @@ describe('Solana /settle authorization', () => {
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(false);
     expect(response.body.transaction).toBe('');
+    expect(response.body.errorReason).toBe('invalid_exact_evm_payload_signature');
   });
 
   it('refuses to move tokens when the payload carries no signature at all', async () => {
@@ -118,6 +119,7 @@ describe('Solana /settle authorization', () => {
 
     expect(mockedSettle).not.toHaveBeenCalled();
     expect(response.body.success).toBe(false);
+    expect(response.body.errorReason).toBe('invalid_exact_evm_payload_signature');
   });
 
   it('refuses to redirect a signed payment to a recipient the merchant did not ask for', async () => {
@@ -135,6 +137,7 @@ describe('Solana /settle authorization', () => {
 
     expect(mockedSettle).not.toHaveBeenCalled();
     expect(response.body.success).toBe(false);
+    expect(response.body.errorReason).toBe('invalid_exact_evm_payload_recipient_mismatch');
   });
 
   it('refuses a recipient that differs from payTo only by letter case', async () => {
@@ -154,6 +157,7 @@ describe('Solana /settle authorization', () => {
 
     expect(mockedSettle).not.toHaveBeenCalled();
     expect(response.body.success).toBe(false);
+    expect(response.body.errorReason).toBe('invalid_exact_evm_payload_recipient_mismatch');
   });
 
   it('refuses a signed payment worth less than the resource requires', async () => {
@@ -186,32 +190,33 @@ describe('Solana /settle authorization', () => {
     expect(response.body.success).toBe(false);
   });
 
-  it('still settles a correctly signed payment', async () => {
+  it('verifies a correctly signed payment but refuses real settlement without durable replay storage', async () => {
     const payment = signedPayment();
 
     const response = await request(app)
       .post('/settle')
       .send({ paymentPayload: payment, paymentRequirements: requirements() });
 
-    expect(mockedSettle).toHaveBeenCalledTimes(1);
-    expect(response.body.success).toBe(true);
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(response.body.success).toBe(false);
+    expect(response.body.errorReason).toBe('solana_durability_unavailable');
     expect(response.body.payer).toBe(payment.payload.from);
     expect(response.body.network).toBe(SOLANA_MAINNET);
   });
 
-  it('settles a captured payload once, then replays the original instead of paying twice', async () => {
+  it('does not let a captured payload reach real settlement without durable replay storage', async () => {
     const payment = signedPayment();
     const body = { paymentPayload: payment, paymentRequirements: requirements() };
 
     const first = await request(app).post('/settle').send(body);
     const second = await request(app).post('/settle').send(body);
 
-    expect(mockedSettle).toHaveBeenCalledTimes(1);
-    expect(second.body.success).toBe(true);
-    expect(second.body.transaction).toBe(first.body.transaction);
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(first.body.errorReason).toBe('solana_durability_unavailable');
+    expect(second.body.errorReason).toBe('solana_durability_unavailable');
   });
 
-  it('settles once when the same payload arrives concurrently', async () => {
+  it('does not let concurrent requests reach real settlement without durable replay storage', async () => {
     const payment = signedPayment();
     const body = { paymentPayload: payment, paymentRequirements: requirements() };
 
@@ -221,11 +226,10 @@ describe('Solana /settle authorization', () => {
       request(app).post('/settle').send(body),
     ]);
 
-    expect(mockedSettle).toHaveBeenCalledTimes(1);
-    const hashes = new Set(responses.map(r => r.body.transaction));
-    expect(hashes.size).toBe(1);
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(responses.every(r => r.body.errorReason === 'solana_durability_unavailable')).toBe(true);
   });
-  it('settles a second, different payment that happens to reuse a nonce', async () => {
+  it('settles a second, different payment that happens to reuse a nonce in simulated mode', async () => {
     // The nonce is a client-chosen string and nothing forces it to be unique.
     // Keying replay on it would make this legitimate second payment look like a
     // duplicate and hand the second merchant the first payment's hash.
@@ -233,19 +237,30 @@ describe('Solana /settle authorization', () => {
     const reusedNonce = 'same-nonce';
     const OTHER_MERCHANT = '9hrYjBscrbmNkQutdZhDecxYs7GxVFRUhPCbLGe5kRCY';
 
-    const first = signedPayment({}, { keypair, nonce: reusedNonce, to: MERCHANT });
-    const firstRes = await request(app)
-      .post('/settle')
-      .send({ paymentPayload: first, paymentRequirements: requirements(MERCHANT) });
+    const previousReal = process.env.ENABLE_REAL_SETTLEMENT;
+    const previousSimulated = process.env.ALLOW_SIMULATED_SETTLEMENT;
+    delete process.env.ENABLE_REAL_SETTLEMENT;
+    process.env.ALLOW_SIMULATED_SETTLEMENT = 'true';
 
-    const second = signedPayment({}, { keypair, nonce: reusedNonce, to: OTHER_MERCHANT, amount: '90000000' });
-    const secondRes = await request(app)
-      .post('/settle')
-      .send({ paymentPayload: second, paymentRequirements: requirements(OTHER_MERCHANT, '90000000') });
+    try {
+      const first = signedPayment({}, { keypair, nonce: reusedNonce, to: MERCHANT });
+      const firstRes = await request(app)
+        .post('/settle')
+        .send({ paymentPayload: first, paymentRequirements: requirements(MERCHANT) });
 
-    expect(mockedSettle).toHaveBeenCalledTimes(2);
-    expect(secondRes.body.success).toBe(true);
-    expect(secondRes.body.transaction).not.toBe(firstRes.body.transaction);
+      const second = signedPayment({}, { keypair, nonce: reusedNonce, to: OTHER_MERCHANT, amount: '90000000' });
+      const secondRes = await request(app)
+        .post('/settle')
+        .send({ paymentPayload: second, paymentRequirements: requirements(OTHER_MERCHANT, '90000000') });
+
+      expect(mockedSettle).not.toHaveBeenCalled();
+      expect(firstRes.body.success).toBe(true);
+      expect(secondRes.body.success).toBe(true);
+      expect(secondRes.body.transaction).not.toBe(firstRes.body.transaction);
+    } finally {
+      process.env.ENABLE_REAL_SETTLEMENT = previousReal;
+      process.env.ALLOW_SIMULATED_SETTLEMENT = previousSimulated;
+    }
   });
 });
 
@@ -297,15 +312,16 @@ describe('Solana /settle honors the settlement kill switch', () => {
     expect(response.body.transaction).not.toBe('REAL_TX');
   });
 
-  it('settles for real only when the real flag is set', async () => {
+  it('refuses real Solana settlement until durable replay storage is installed', async () => {
     process.env.ENABLE_REAL_SETTLEMENT = 'true';
 
     const response = await request(app)
       .post('/settle')
       .send({ paymentPayload: signedPayment(), paymentRequirements: requirements() });
 
-    expect(mockedSettle).toHaveBeenCalledTimes(1);
-    expect(response.body.transaction).toBe('REAL_TX');
+    expect(mockedSettle).not.toHaveBeenCalled();
+    expect(response.body.transaction).toBe('');
+    expect(response.body.errorReason).toBe('solana_durability_unavailable');
     expect(response.headers['x-settlement-mode']).toBeUndefined();
   });
 });
