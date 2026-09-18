@@ -424,7 +424,12 @@ export async function settlePayment(req: Request, res: Response) {
     const publicClient = createPublicClient({ chain, transport: http(networkConfig.rpcUrl) });
     const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
     const tokenCode = await publicClient.getCode({ address: parsedPermit2.auth.permitted.token as `0x${string}` });
-    if (!tokenCode || tokenCode === '0x') { settleTotal.inc({ network, result: 'failed' }); recordDuration(startTime, network); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' }); }
+    if (!tokenCode || tokenCode === '0x') {
+      log.error({ payer: parsedPermit2.auth.from, network, token: parsedPermit2.auth.permitted.token, result: 'settlement_asset_unavailable' }, 'Settlement refused: configured token has no deployed bytecode on the target chain');
+      settleTotal.inc({ network, result: 'settlement_asset_unavailable' });
+      recordDuration(startTime, network);
+      return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'unsupported_asset' });
+    }
     const proxyCode = await publicClient.getCode({ address: X402_PERMIT2_PROXY });
     if (!proxyCode || proxyCode === '0x') {
       log.error({ payer: parsedPermit2.auth.from, network, proxy: X402_PERMIT2_PROXY, errorReason: 'settlement_proxy_unavailable' }, 'Settlement refused: canonical Permit2 proxy has no deployed bytecode');

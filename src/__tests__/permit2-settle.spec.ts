@@ -4,6 +4,7 @@ import { settlePayment } from '../routes/settle';
 import { createBasePayment, createPaymentRequirements } from './fixtures/payment-fixtures';
 import { proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
 import { settleTotal } from '../lib/metrics';
+import { config } from '../config';
 
 const simulateContract = jest.fn();
 const writeContract = jest.fn();
@@ -81,6 +82,25 @@ describe('Permit2 proxy settlement', () => {
     const response = await request(app()).post('/settle').send({ paymentPayload: payment, paymentRequirements: requirements });
     expect(response.body).toMatchObject({ success: true, transaction: HASH });
     expect(writeContract).toHaveBeenCalledWith(expect.objectContaining({ address: X402_PERMIT2_PROXY, functionName: 'settle' }));
+  });
+
+  it('meters a configured token with no deployed bytecode as a paging fault, not a client failure', async () => {
+    getCode.mockImplementation(({ address }: { address: string }) => Promise.resolve(address.toLowerCase() === config.baseSbcTokenAddress.toLowerCase() ? '0x' : '0x01'));
+    settleTotal.reset();
+    const response = await request(app()).post('/settle').send({
+      paymentPayload: createBasePayment(), paymentRequirements: createPaymentRequirements('eip155:8453'),
+    });
+    expect(response.body).toMatchObject({ success: false, errorReason: 'unsupported_asset' });
+    expect(simulateContract).not.toHaveBeenCalled();
+    expect(writeContract).not.toHaveBeenCalled();
+    const metric = await settleTotal.get();
+    expect(metric.values).toContainEqual(expect.objectContaining({
+      labels: { network: 'eip155:8453', result: 'settlement_asset_unavailable' },
+      value: 1,
+    }));
+    expect(metric.values).not.toContainEqual(expect.objectContaining({
+      labels: { network: 'eip155:8453', result: 'failed' },
+    }));
   });
 
   it('refuses to broadcast when the canonical proxy has no deployed bytecode', async () => {
