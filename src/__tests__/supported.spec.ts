@@ -7,6 +7,7 @@
 import request from 'supertest';
 import express from 'express';
 import { getSupportedNetworks } from '../routes/supported';
+import { config } from '../config';
 
 // Create test app with real implementation
 function createTestApp() {
@@ -122,13 +123,21 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       }
     });
 
-    it('should include Solana mainnet under both identifiers if configured', async () => {
-      const response = await request(app).get('/supported');
-      const { v2, v1 } = kindsFor(response.body, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'solana-mainnet-beta');
+    it('does not advertise Solana even when its keys are configured, pending durable replay storage', async () => {
+      const priorAddress = config.solanaFacilitatorAddress;
+      const priorPrivateKey = config.solanaFacilitatorPrivateKey;
+      config.solanaFacilitatorAddress = '2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K';
+      config.solanaFacilitatorPrivateKey = 'configured-for-test';
 
-      if (v2.length > 0) {
-        expect(v2).toHaveLength(1);
-        expect(v1).toHaveLength(1);
+      try {
+        const response = await request(app).get('/supported');
+        const { v2, v1 } = kindsFor(response.body, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'solana-mainnet-beta');
+        expect(v2).toHaveLength(0);
+        expect(v1).toHaveLength(0);
+        expect(response.body.signers['solana:*']).toBeUndefined();
+      } finally {
+        config.solanaFacilitatorAddress = priorAddress;
+        config.solanaFacilitatorPrivateKey = priorPrivateKey;
       }
     });
   });

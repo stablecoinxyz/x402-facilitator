@@ -310,6 +310,27 @@ export async function settlePayment(req: Request, res: Response) {
         });
       }
 
+      // A signed SPL delegated-transfer message has no nonce that the token
+      // program consumes.  The in-memory replay record below makes ordinary
+      // retries within one process safe, but cannot prove what happened after
+      // a process restart or an uncertain broadcast.  Never turn that into a
+      // real payment until the durable, shared authorization ledger described
+      // in docs/security-assessment-2026-09-17.md is installed.  Simulated
+      // settlement remains available for the demo because it cannot move
+      // funds.
+      if (solanaMode === 'real') {
+        log.error({ payer: solanaOwner, network, errorReason: 'solana_durability_unavailable' }, 'Real Solana settlement refused: durable replay ledger is not configured');
+        settleTotal.inc({ network, result: 'solana_durability_unavailable' });
+        recordDuration(startTime, network);
+        return res.json({
+          success: false,
+          payer: solanaOwner,
+          transaction: '',
+          network,
+          errorReason: 'solana_durability_unavailable',
+        });
+      }
+
       const outcome: SolanaOutcome = await settlementQueue.enqueue(SOLANA_SETTLE_QUEUE_KEY, async () => {
         const previous = nonceTracker.getSettled(network, solanaOwner, solanaSignature);
         if (previous) {

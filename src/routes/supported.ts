@@ -56,11 +56,12 @@ export function getSupportedNetworks(req: Request, res: Response) {
     addSigner(signers, 'eip155:*', config.radiusTestnetFacilitatorAddress);
   }
 
-  // Add Solana mainnet if configured
-  if (config.solanaFacilitatorAddress && config.solanaFacilitatorPrivateKey) {
-    addKind('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', { assetTransferMethod: 'delegated-spl', name: 'SBC', version: '1' });
-    addSigner(signers, 'solana:*', config.solanaFacilitatorAddress);
-  }
+  // Deliberately do not advertise Solana.  Its delegated SPL transfer uses a
+  // signed message whose nonce is not consumed on-chain; until a shared,
+  // durable broadcast ledger is present, a restart after an uncertain
+  // broadcast could otherwise pay the same authorization twice.  The route
+  // also fails closed for real Solana settlement.  Keeping this out of
+  // capability discovery prevents clients from selecting an unsafe path.
 
   // SupportedResponse advertises extension identifiers. The extension's schema
   // and client data live in the PaymentRequired/PAYMENT-SIGNATURE envelopes.

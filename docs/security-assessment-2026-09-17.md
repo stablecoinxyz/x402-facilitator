@@ -9,7 +9,7 @@ The findings below were reviewed against commit `f904799`; the Permit2 migration
 - **Critical (EVM permits do not bind `payTo`)** and **High (EVM transfers the permit maximum)** — EVM Exact settlement now requires a Permit2 witness that binds `witness.to` and the exact `permitted.amount`, enforced by the canonical x402 proxy; legacy ERC-2612 EVM payloads are rejected.
 - **High (Radius skips the only pre-broadcast validity check)** — partially addressed: the Permit2 EIP-712 signature is now verified locally on every chain before settlement; Radius still skips the on-chain proxy simulation.
 
-Not addressed here and queued in [`TODO.md`](../TODO.md): the Solana double-pay durability gap, unbounded queue/rate controls, Casper error reflection, and the production dependency advisories.
+Not addressed here and queued in [`TODO.md`](../TODO.md): durable Solana settlement (real Solana is now fail-closed and not advertised), unbounded queue/rate controls, Casper error reflection, and the production dependency advisories.
 
 ## Executive summary
 
@@ -31,11 +31,11 @@ Anyone who obtains a still-valid permit payload can submit it with a different `
 
 ### Critical — Solana authorization can be paid twice after an uncertain broadcast or process restart
 
-**Status: Open** — queued in [`TODO.md`](../TODO.md) (Solana durability); not addressed by the Permit2 migration, which is EVM-only.
+**Status: Mitigated (feature withheld)** — real Solana settlement now fails closed with `solana_durability_unavailable` and Solana is absent from `/supported`. The durable implementation remains queued in [`TODO.md`](../TODO.md); Permit2 does not address it because Permit2 is EVM-only.
 
 The signed Solana message includes a nonce, but that nonce is not consumed by the SPL Token program. Replay state is only the in-memory `NonceTracker` ([`src/protection/nonce-tracker.ts`](https://github.com/stablecoinxyz/x402-facilitator/blob/f904799/src/protection/nonce-tracker.ts)). After `sendRawTransaction` succeeds but confirmation errors, settlement returns `settlement_pending` ([`src/solana/settle.ts`](https://github.com/stablecoinxyz/x402-facilitator/blob/f904799/src/solana/settle.ts)); the caller records a nonce only for `success` ([`src/routes/settle.ts`](https://github.com/stablecoinxyz/x402-facilitator/blob/f904799/src/routes/settle.ts)). A retry can therefore broadcast the same delegated transfer again. Restarting or running another instance also empties the replay record.
 
-**Fix:** persist an atomic authorization state machine before broadcast (`new → broadcast(hash) → confirmed/failed`), return the stored hash for every retry, and reconcile pending signatures asynchronously. Use a shared durable store across instances/restarts; never rebroadcast a known authorization.
+**Required before re-enabling:** persist an atomic authorization state machine before broadcast (`new → broadcast(hash) → confirmed/failed`), return the stored hash for every retry, and reconcile pending signatures asynchronously. Use a shared durable store across instances/restarts; never rebroadcast a known authorization.
 
 ### High — EVM settlement transfers the permit maximum, not the requested exact amount
 
