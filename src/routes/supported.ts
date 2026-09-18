@@ -12,7 +12,7 @@ export function getSupportedNetworks(req: Request, res: Response) {
     x402Version: number;
     scheme: string;
     network: string;
-    extra: { assetTransferMethod: string; name: string; version: string };
+    extra: { assetTransferMethod: string; name: string; version: string; feePayer?: string };
   }> = [];
 
   // Collect configured signer addresses keyed by CAIP-2 namespace
@@ -22,7 +22,7 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // v2 advertises CAIP-2; v1 advertises the plain name, because that is what a v1
   // client will send back in paymentRequirements.network. Advertising CAIP-2 on a
   // v1 kind gives the client an identifier its own spec doesn't allow it to use.
-  function addKind(network: string, extra: { assetTransferMethod: string; name: string; version: string }, includeV1 = true) {
+  function addKind(network: string, extra: { assetTransferMethod: string; name: string; version: string; feePayer?: string }, includeV1 = true) {
     kinds.push({ x402Version: 2, scheme: 'exact', network, extra });
     const v1Name = toV1Network(network);
     if (includeV1 && v1Name) {
@@ -56,12 +56,15 @@ export function getSupportedNetworks(req: Request, res: Response) {
     addSigner(signers, 'eip155:*', config.radiusTestnetFacilitatorAddress);
   }
 
-  // Deliberately do not advertise Solana.  Its delegated SPL transfer uses a
-  // signed message whose nonce is not consumed on-chain; until a shared,
-  // durable broadcast ledger is present, a restart after an uncertain
-  // broadcast could otherwise pay the same authorization twice.  The route
-  // also fails closed for real Solana settlement.  Keeping this out of
-  // capability discovery prevents clients from selecting an unsafe path.
+  // SVM Exact is safe to advertise because the payer signs the complete
+  // transfer transaction and this address signs only as fee payer. The old
+  // delegated-SPL method remains deliberately absent.
+  if (config.solanaFacilitatorAddress && config.solanaFacilitatorPrivateKey) {
+    addKind('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', {
+      assetTransferMethod: 'svm-exact', name: 'SBC', version: '1', feePayer: config.solanaFacilitatorAddress,
+    });
+    addSigner(signers, 'solana:*', config.solanaFacilitatorAddress);
+  }
 
   // SupportedResponse advertises extension identifiers. The extension's schema
   // and client data live in the PaymentRequired/PAYMENT-SIGNATURE envelopes.
@@ -93,7 +96,7 @@ const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
 };
 
 function renderSupportedHTML(data: {
-  kinds: Array<{ x402Version: number; scheme: string; network: string; extra: { assetTransferMethod: string; name: string; version: string } }>;
+  kinds: Array<{ x402Version: number; scheme: string; network: string; extra: { assetTransferMethod: string; name: string; version: string; feePayer?: string } }>;
   extensions: unknown[];
   signers: Record<string, string[]>;
 }) {
