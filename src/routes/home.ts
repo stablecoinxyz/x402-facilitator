@@ -597,12 +597,12 @@ export function homePage(_req: Request, res: Response) {
         <div class="feature-card reveal reveal-delay-1">
           <div class="feature-icon">&#x1f50d;</div>
           <h3>Payment Verification</h3>
-          <p>Validates ERC-2612 permit signatures and Solana transfer instructions, ensuring payment authenticity before resource access is granted.</p>
+          <p>Validates Permit2 EVM authorizations and payer-signed Solana Exact transactions before resource access is granted.</p>
         </div>
         <div class="feature-card reveal reveal-delay-2">
           <div class="feature-icon">&#x26a1;</div>
           <h3>On-Chain Settlement</h3>
-          <p>Executes the actual token transfers on-chain after verification, moving funds from payer to resource server via permit-based transfers.</p>
+          <p>Settles exact payments on-chain: Permit2 on EVM and fee-sponsored, payer-signed transactions on Solana.</p>
         </div>
         <div class="feature-card reveal reveal-delay-3">
           <div class="feature-icon">&#x1f310;</div>

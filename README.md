@@ -2,7 +2,7 @@
 
 SBC x402 Facilitator — verifies and settles payments using the [x402 protocol](https://github.com/coinbase/x402) (v2).
 
-Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 support is used only by the optional `eip2612GasSponsoring` extension to establish Permit2 allowance; the Permit2 witness and canonical x402 proxy bind the payment recipient and amount. Solana delegated-SPL simulation is available for development; real Solana settlement is intentionally disabled pending durable replay storage.
+Uses the standard x402 Permit2 Exact EVM flow for EVM chains and the standard payer-signed x402 SVM Exact flow for Solana. SBC's ERC-2612 support is used only by the optional `eip2612GasSponsoring` extension to establish Permit2 allowance.
 
 **[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — unit suite green (`npm test`); the `npm run conformance` harness still builds legacy ERC-2612 EVM payloads and is pending migration to Permit2 | **[Observability →](./grafana/README.md)**
 
@@ -14,6 +14,7 @@ Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 sup
 | Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | Permit2 + canonical x402 proxy |
 | Radius | `eip155:723487` | `RADIUS_` | Permit2 + canonical x402 proxy |
 | Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | Permit2 + canonical x402 proxy |
+| Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | `SOLANA_` | Payer-signed SVM Exact + facilitator fee sponsorship |
 
 Each network has its own env vars — mainnets and testnets can be configured simultaneously.
 
@@ -27,7 +28,7 @@ cp .env.example .env  # configure facilitator keys per network
 ## Concurrency & Settlement Safety
 
 - **Per-EOA settlement queue** — On-chain execution is serialized per facilitator wallet to prevent nonce collisions. Critical for chains without a mempool (e.g. Radius) where concurrent nonce submissions fail immediately. Different chains settle in parallel since they use separate wallets.
-- **Idempotent settle (simulated only)** — Simulated EVM and Solana responses are deduplicated in memory for developer convenience. Real EVM Permit2 relies on its on-chain nonce plus the per-wallet queue. **Real Solana settlement is disabled**: the SPL Token program does not consume the signed-message nonce, and an in-memory record cannot survive an uncertain broadcast plus restart. It will not be advertised or enabled until a shared durable authorization ledger records the transaction hash before a retry can run.
+- **Idempotent settle** — Real EVM Permit2 consumes an on-chain nonce. Solana Exact accepts a payer-signed immutable transaction; retries submit the same bytes and Solana deduplicates that transaction on-chain. The SVM scheme also keeps a short in-flight cache to reject duplicate settlement requests before confirmation.
 - **`settlement_pending` is not a failure** — If the Permit2 settlement is broadcast and the receipt cannot be read (RPC timeout, node error), `/settle` answers `{ success: false, errorReason: "settlement_pending", transaction: "0x..." }`. The transaction may still confirm. Per the x402 v2 spec this response always carries the broadcast hash: **reconcile that hash on chain before deciding anything**. Do not treat it as did-not-happen and sign a fresh authorization — that is a second payment. Re-presenting the same payload is also not useful: the Permit2 nonce is consumed on chain, so the retry reverts.
 - **Reverted tx carries its hash** — If the Permit2 settlement is mined and reverts, `/settle` answers `{ success: false, errorReason: "invalid_transaction_state", transaction: "0x..." }` with the reverted tx hash for on-chain debugging.
 
@@ -104,7 +105,7 @@ The server auto-selects the next available port if `FACILITATOR_PORT` (default 3
 
 Simulation is opt-in. A deployment with neither flag set refuses to settle rather than reporting a settlement that never happened.
 
-`ENABLE_REAL_SETTLEMENT=true` enables real EVM settlement only. Real Solana settlement returns `solana_durability_unavailable` until its durable replay ledger is implemented; it is therefore absent from `/supported` even if Solana keys are configured.
+`ENABLE_REAL_SETTLEMENT=true` enables real EVM and standard SVM Exact settlement. Solana requires a payer-signed transaction whose `feePayer` is the configured facilitator; the facilitator never uses delegated SPL authority.
 
 ## Demo
 
@@ -112,7 +113,7 @@ Interactive demo using SBC tokens. Generates wallets, checks balances, grants th
 
 > **Safety:** `npm run setup` broadcasts a real ERC-20 `approve(Permit2, 100 SBC)` transaction and costs gas. It gives the facilitator no allowance, but gives Permit2 a standing 100 SBC allowance. Use `--network base-sepolia` for an investor demo unless the mainnet wallet is intentionally funded and approved. The generated configuration uses simulated settlement; the client refuses a real or unknown server unless `DEMO_ALLOW_REAL_SETTLEMENT=true` is explicitly set.
 >
-> The bundled demo client uses the standard Exact EVM Permit2 witness flow. The mainnet smoke script (`scripts/smoke-mainnet.ts`) and conformance harness (`src/__tests__/conformance.ts`) still need their own Permit2 migration. Real Solana smoke settlement is intentionally blocked until durable replay storage is added. Radius and Radius testnet are not investor-demo targets until the canonical Permit2 and x402 proxy deployments have been bytecode-verified and a real testnet settlement has passed.
+> The bundled demo client uses the standard Exact EVM Permit2 witness flow. The mainnet smoke script (`scripts/smoke-mainnet.ts`) and conformance harness (`src/__tests__/conformance.ts`) still need their own Permit2 migration. Radius and Radius testnet are not investor-demo targets until the canonical Permit2 and x402 proxy deployments have been bytecode-verified and a real testnet settlement has passed.
 
 ```bash
 npm run setup -- --network <name>   # generate wallets, approve, write .env
