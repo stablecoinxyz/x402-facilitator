@@ -47,8 +47,25 @@ verify or settle a mainnet SVM transaction.
 The legacy delegated-SPL endpoint remains fail-closed for real settlement and
 is not advertised.
 
-`npm run prove:svm-devnet` automates this proof with throwaway devnet keys and
-a temporary, low-value SPL mint. It is deliberately isolated from `.env` and
+`npm run prove:svm-devnet` automates this proof with a local, gitignored
+throwaway devnet sponsor and a temporary, low-value SPL mint. It is deliberately isolated from `.env` and
 production: it sets `SOLANA_SVM_NETWORK=solana-devnet` and its own devnet RPC
-and feature gate in its process only. It prints the public devnet transaction
-signature but never prints or persists private keys.
+and feature gate in its process only. Generate the local sponsor once with
+`solana-keygen new --no-bip39-passphrase --outfile .devnet-svm-sponsor.json`;
+the script prints the public transaction signature but never prints the private
+key.
+
+## Devnet proof record
+
+On 2026-09-19, the complete real-settlement flow succeeded on Solana devnet
+using the isolated sponsor and a temporary SPL mint:
+
+- Network: `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`
+- Transaction: [`2jhJy8yKniwTQj1AxATFyhGnENvm1btpV4P3sBCBHLxQMFGh4kW71mQLCo4GeA2g48TunbJTKTh2qZ2ejJnc8Rur`](https://explorer.solana.com/tx/2jhJy8yKniwTQj1AxATFyhGnENvm1btpV4P3sBCBHLxQMFGh4kW71mQLCo4GeA2g48TunbJTKTh2qZ2ejJnc8Rur?cluster=devnet)
+- Mint: `FFAiDep7XTL5Gn2v3fQKaZ8PrYXuBfRWvrkJC5xjFwY9`
+- Amount: `1000` base units (0.001 of the temporary six-decimal token)
+
+The payer partial-signed the transaction with the official x402 SVM client;
+this facilitator verified it, supplied the fee-payer signature, and the
+merchant token account balance was checked after confirmation. The signature
+was also independently confirmed at `finalized` commitment through Solana CLI.
