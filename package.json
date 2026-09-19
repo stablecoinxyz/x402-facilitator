@@ -32,7 +32,8 @@
     "test:coverage": "jest --coverage --silent",
     "conformance": "tsx src/__tests__/conformance.ts",
     "smoke:solana": "tsx scripts/smoke-solana-mainnet.ts",
-    "smoke:solana:live": "tsx scripts/smoke-solana-settle-live.ts"
+    "smoke:solana:live": "tsx scripts/smoke-solana-settle-live.ts",
+    "prove:svm-devnet": "tsx scripts/prove-svm-exact-devnet.ts"
   },
   "dependencies": {
     "@solana/kit": "^5.1.0",
