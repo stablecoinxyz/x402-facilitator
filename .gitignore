@@ -3,6 +3,7 @@ dist
 coverage
 .env
 .devnet-svm-sponsor.json
+.mainnet-svm-test-payer.json
 .DS_Store
 *.log
 docs/local-erc2612-security-plan.md
