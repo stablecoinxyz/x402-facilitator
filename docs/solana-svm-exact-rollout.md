@@ -55,6 +55,13 @@ and feature gate in its process only. Generate the local sponsor once with
 the script prints the public transaction signature but never prints the private
 key.
 
+`npm run prove:svm-mainnet` is a deliberately manual, low-value production
+check. It requires `SVM_MAINNET_MERCHANT`, a separately funded, gitignored
+`.mainnet-svm-test-payer.json`, and an existing SBC associated token account
+for that merchant. It always uses the public mainnet RPC and the production
+facilitator URL; it must never be made part of CI or a routine smoke test,
+because each successful invocation transfers its configured SBC amount.
+
 ## Devnet proof record
 
 On 2026-09-19, the complete real-settlement flow succeeded on Solana devnet
@@ -69,3 +76,21 @@ The payer partial-signed the transaction with the official x402 SVM client;
 this facilitator verified it, supplied the fee-payer signature, and the
 merchant token account balance was checked after confirmation. The signature
 was also independently confirmed at `finalized` commitment through Solana CLI.
+
+## Mainnet proof record
+
+On 2026-09-19, one bounded production payment completed through the live
+facilitator using the standard x402 SVM Exact scheme:
+
+- Network: `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`
+- Transaction: [`3yjpgYFTFLJHWRgVn7CZhM8oyZVEYEkKomyG5n8YAnBkBW4niqxZX2ZPv6qQCaVhETUHMQKrBz7qdqSHgodZb7Fp`](https://explorer.solana.com/tx/3yjpgYFTFLJHWRgVn7CZhM8oyZVEYEkKomyG5n8YAnBkBW4niqxZX2ZPv6qQCaVhETUHMQKrBz7qdqSHgodZb7Fp)
+- Mint: `DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA` (SBC)
+- Amount: `1,000,000` base units (0.001 SBC)
+- Payer: isolated test wallet `WXKrUGqEoiNxEkiSGeJAJ3sYwYTgb5aTN4z11dTeMZc`
+- Merchant: `5MVQwMVi5kJbfHaXkpwjDSGYNQ72dcSabbfCEt5FYNiQ`
+- Fee payer: facilitator `2mSjKVjzRGXcipq3DdJCijbepugfNSJCN1yVN2tgdw5K`
+
+The payer balance became zero and the merchant SBC balance increased by 0.001.
+The transaction was independently confirmed through Solana CLI. This proves
+the live flow: payer signs the exact transfer, `/verify` validates it, and
+`/settle` adds only the configured facilitator fee-payer signature.
