@@ -46,3 +46,9 @@ verify or settle a mainnet SVM transaction.
 
 The legacy delegated-SPL endpoint remains fail-closed for real settlement and
 is not advertised.
+
+`npm run prove:svm-devnet` automates this proof with throwaway devnet keys and
+a temporary, low-value SPL mint. It is deliberately isolated from `.env` and
+production: it sets `SOLANA_SVM_NETWORK=solana-devnet` and its own devnet RPC
+and feature gate in its process only. It prints the public devnet transaction
+signature but never prints or persists private keys.
