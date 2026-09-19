@@ -2,6 +2,7 @@ node_modules
 dist
 coverage
 .env
+.devnet-svm-sponsor.json
 .DS_Store
 *.log
 docs/local-erc2612-security-plan.md

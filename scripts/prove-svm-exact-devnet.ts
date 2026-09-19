@@ -9,6 +9,8 @@
 import express from 'express';
 import request from 'supertest';
 import bs58 from 'bs58';
+import fs from 'fs';
+import path from 'path';
 import {
   Connection,
   Keypair,
@@ -27,6 +29,15 @@ const RPC_URL = 'https://api.devnet.solana.com';
 const DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
 const DECIMALS = 6;
 const AMOUNT = 1_000; // 0.001 of the temporary token
+const SPONSOR_KEYPAIR_PATH = process.env.SVM_DEVNET_SPONSOR_KEYPAIR
+  || path.resolve(process.cwd(), '.devnet-svm-sponsor.json');
+
+function loadSponsor(): Keypair {
+  if (!fs.existsSync(SPONSOR_KEYPAIR_PATH)) {
+    throw new Error(`missing persistent devnet sponsor keypair at ${SPONSOR_KEYPAIR_PATH}; generate it with solana-keygen before running this proof`);
+  }
+  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(SPONSOR_KEYPAIR_PATH, 'utf8'))));
+}
 
 async function confirmAirdrop(connection: Connection, address: PublicKey) {
   let lastError: unknown;
@@ -48,12 +59,14 @@ async function confirmAirdrop(connection: Connection, address: PublicKey) {
 }
 
 async function main() {
-  const sponsor = Keypair.generate();
+  const sponsor = loadSponsor();
   const payer = Keypair.generate();
   const merchant = Keypair.generate();
   const connection = new Connection(RPC_URL, 'confirmed');
 
-  await confirmAirdrop(connection, sponsor.publicKey);
+  if ((await connection.getBalance(sponsor.publicKey, 'confirmed')) < LAMPORTS_PER_SOL / 50) {
+    await confirmAirdrop(connection, sponsor.publicKey);
+  }
 
   const mint = await createMint(connection, sponsor, sponsor.publicKey, null, DECIMALS);
   const payerAta = await getOrCreateAssociatedTokenAccount(connection, sponsor, mint, payer.publicKey);
