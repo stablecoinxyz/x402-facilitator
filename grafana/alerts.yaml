@@ -1,15 +1,25 @@
 # Grafana Alert Rules for x402 Facilitator
 #
-# GENERATED FROM THE LIVE RULES on 2026-08-26.
+# GENERATED FROM THE LIVE RULES on 2026-08-26; execErrState and routing updated 2026-09-29.
 # Regenerate rather than hand-edit, so this file cannot drift from what
 # actually fires:
 #   curl -H "Authorization: Bearer $GRAFANA_TOKEN" \
 #     https://sbclogs.grafana.net/api/v1/provisioning/alert-rules
 #
 # Stack sbclogs.grafana.net, folder x402, group x402-alerts,
-# datasource grafanacloud-prom, receiver "SBC Tech".
+# datasource grafanacloud-prom, receiver "SBC Tech" (email) — except
+# "Client error volume elevated" and "Permit expired attempts (dashboard
+# only)", which have no receiver since 2026-09-29: client faults, visible in
+# Grafana but never emailed. The default policy routes them to "empty".
 # Every rule sets noDataState=OK: at this volume a quiet window is normal,
 # and NoData->Alerting would page on silence.
+# Every rule except "Facilitator unreachable" sets execErrState=KeepLast
+# (changed 2026-09-29): a query error is Grafana Cloud's own Prometheus
+# timing out or 500ing, not a facilitator fault. With Error, every blip
+# emailed a DatasourceError from the for: 0s rules; the 7 days before the
+# change held only such errors, no real firing. "Facilitator unreachable"
+# stays on Error so a metrics outage longer than its 5m `for` still
+# surfaces instead of holding a stale green.
 #
 # Settle result labels, split by whose fault the outcome is. The split is
 # what the alerts key off — do not add a label without placing it.
