@@ -2,6 +2,9 @@
 
 ## Next: settlement durability and abuse controls
 
+- Build the retried-Permit2-settle fix:
+  `docs/fixes/permit2-settled-retry-answers-failed.md` (spec decided, not
+  implemented).
 - Persist Solana authorization state atomically before broadcast and reconcile
   uncertain broadcasts; shared state must survive restarts/replicas.
 - Add bounded shared settlement queues, request/RPC deadlines, global rate
