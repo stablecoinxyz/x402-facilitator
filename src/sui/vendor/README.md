@@ -42,3 +42,11 @@ gh api "repos/hayes-mysten/x402/contents/typescript/packages/mechanisms/sui/src/
 
 Exit: replace this directory with the npm `@x402/sui` package once it is published and its
 facilitator matches spec #3081.
+
+## Re-diff status
+
+**2026-10-29, after the mainnet deploy: no drift.** PR #3082 head is
+`5d9e9479ac0b308d12bad6254fbd41b666d9def2` — the same commit vendored here — so every file above
+diffs empty. Spec PR #3081 head is `f5b8e47602739480eeda4a39c23d6c917d25f0a2`, last updated
+2026-10-15, so the spec this was built against has not moved. Both PRs are still open/unmerged;
+re-run this check when either lands.
