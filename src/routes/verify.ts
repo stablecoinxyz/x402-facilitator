@@ -6,6 +6,7 @@ import { verifySolanaPayment } from '../solana/verify';
 import { getExactSvmScheme } from '../solana/svm-exact';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
+import { parseAmount } from '../lib/amount';
 import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, PERMIT2_ADDRESS } from '../evm/permit2';
 
 /**
@@ -221,7 +222,7 @@ export async function verifyPayment(req: Request, res: Response) {
     // (value-below-requirement is already rejected downstream with the spec code.)
     const reqAmount = paymentRequirements?.amount ?? '0';
     const payFrom = paymentPayload.payload?.authorization?.from ?? paymentPayload.payload?.from;
-    if (BigInt(reqAmount) <= 0n) {
+    if (parseAmount(reqAmount) <= 0n) {
       log.warn({ payer: payFrom ?? 'unknown', network, errorReason: 'invalid_amount' }, 'Zero-value payment rejected');
       verifyTotal.inc({ network, result: 'invalid' });
       return res.json({ isValid: false, payer: payFrom ?? 'unknown', invalidReason: 'invalid_amount' });

@@ -93,6 +93,38 @@ describe('Zero-value & self-payment guard', () => {
     });
   });
 
+  // A non-numeric requirement amount made BigInt() throw inside the guard, so the
+  // request fell to the catch-all and was counted as `unknown` — a facilitator
+  // fault — and /verify answered HTTP 500. Seen in production 2026-10-28 from a
+  // fuzzing client sending `amount: "abc"`.
+  describe('unparseable requirement amount', () => {
+    const junk: unknown[] = ['abc', '1.5', { n: 1 }];
+
+    it.each(junk)('/verify rejects amount %p as invalid_amount with HTTP 200', async (amount) => {
+      const res = await request(appWith(verifyPayment, '/verify'))
+        .post('/verify')
+        .send({
+          paymentPayload: createBasePayment(),
+          paymentRequirements: { ...createPaymentRequirements('eip155:8453'), amount },
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.isValid).toBe(false);
+      expect(res.body.invalidReason).toBe('invalid_amount');
+    });
+
+    it.each(junk)('/settle rejects amount %p as invalid_amount', async (amount) => {
+      const res = await request(appWith(settlePayment, '/settle'))
+        .post('/settle')
+        .send({
+          paymentPayload: createBasePayment(),
+          paymentRequirements: { ...createPaymentRequirements('eip155:8453'), amount },
+        });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(false);
+      expect(res.body.errorReason).toBe('invalid_amount');
+    });
+  });
+
   describe('Solana /verify', () => {
     it('rejects a zero-value payment', async () => {
       const res = await request(appWith(verifyPayment, '/verify'))

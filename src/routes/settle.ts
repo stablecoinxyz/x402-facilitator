@@ -9,6 +9,7 @@ import { getExactSvmScheme } from '../solana/svm-exact';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
+import { parseAmount } from '../lib/amount';
 import { resolveEvmFacilitatorAddress } from './verify';
 import logger from '../lib/logger';
 import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
@@ -237,7 +238,7 @@ export async function settlePayment(req: Request, res: Response) {
     // from==payTo is a self-transfer that only wastes facilitator gas.
     const reqAmount = paymentRequirements?.amount ?? '0';
     const payFrom = paymentPayload.payload?.authorization?.from ?? paymentPayload.payload?.from;
-    if (BigInt(reqAmount) <= 0n) {
+    if (parseAmount(reqAmount) <= 0n) {
       log.warn({ payer: payFrom ?? 'unknown', network, errorReason: 'invalid_amount' }, 'Zero-value settlement rejected');
       settleTotal.inc({ network, result: 'failed' });
       return res.json({ success: false, payer: payFrom ?? 'unknown', transaction: '', network, errorReason: 'invalid_amount' });
