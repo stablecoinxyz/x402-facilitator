@@ -145,19 +145,32 @@ async function main() {
   };
   const body = { paymentPayload: payload, paymentRequirements: payload.accepted };
 
+  // Default: the real route handlers in this process. Set SUI_PROVE_BASE_URL to
+  // drive a deployed host instead — the live smoke a deploy needs, over the real
+  // socket, through the proxy, with the host's own secrets.
+  const baseUrl = process.env.SUI_PROVE_BASE_URL?.replace(/\/$/, '');
   const app = express();
   app.use(express.json());
   app.post('/verify', verifyPayment);
   app.post('/settle', settlePayment);
-  const server = app;
+  const post = async (path: string, payloadBody: unknown) => {
+    if (!baseUrl) return request(app).post(path).send(payloadBody);
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payloadBody),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  console.log(`target    ${baseUrl ?? 'in-process routes'}`);
 
-  const verified = await request(server).post('/verify').send(body);
+  const verified = await post('/verify', body);
   console.log(`verify    ${JSON.stringify(verified.body)}`);
   if (verified.status !== 200 || verified.body.isValid !== true) {
     fail(`verify rejected the payment: ${JSON.stringify(verified.body)}`);
   }
 
-  const settled = await request(server).post('/settle').send(body);
+  const settled = await post('/settle', body);
   console.log(`settle    ${JSON.stringify(settled.body)}`);
   if (settled.status !== 200 || settled.body.success !== true) {
     fail(`settle failed: ${JSON.stringify(settled.body)}`);
@@ -171,7 +184,7 @@ async function main() {
   // payment. The scheme's own duplicate answer carries an empty `transaction`
   // (measured on testnet 2026-10-29), so this also guards the route's
   // restoration of the digest: a payer must be able to reconcile.
-  const replay = await request(server).post('/settle').send(body);
+  const replay = await post('/settle', body);
   console.log(`replay    ${JSON.stringify(replay.body)}`);
   if (replay.body.success !== false || replay.body.errorReason !== 'duplicate_settlement') {
     fail(`a re-settle must answer duplicate_settlement, got ${JSON.stringify(replay.body)}`);
