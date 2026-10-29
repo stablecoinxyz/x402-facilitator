@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network, getSuiNetwork, isSuiExactEnabled } from '../config';
 
 /**
  * GET /supported - x402 V2 Capability Discovery
@@ -65,6 +65,15 @@ export function getSupportedNetworks(req: Request, res: Response) {
     addSigner(signers, 'solana:*', config.solanaFacilitatorAddress);
   }
 
+  // Sui Exact is opt-in on an explicit CAIP-2 network. No `extra`: phase 1 runs
+  // no gas sponsor (Circle USDC is on Sui's gasless allowlist), and `extra.nonce`
+  // is issued by the resource server, never advertised by the facilitator. No v1
+  // kind — the Sui scheme exists only in the v2 spec.
+  const suiNetwork = getSuiNetwork();
+  if (isSuiExactEnabled() && suiNetwork) {
+    addKind(suiNetwork.caip2, {}, false);
+  }
+
   // SupportedResponse advertises extension identifiers. The extension's schema
   // and client data live in the PaymentRequired/PAYMENT-SIGNATURE envelopes.
   const hasEvm = Object.keys(signers).some(k => k === 'eip155:*');
@@ -89,6 +98,8 @@ const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { name: 'Solana', type: 'Mainnet' },
   'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1': { name: 'Solana Devnet', type: 'Testnet' },
   'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z': { name: 'Solana Testnet', type: 'Testnet' },
+  'sui:mainnet': { name: 'Sui', type: 'Mainnet' },
+  'sui:testnet': { name: 'Sui Testnet', type: 'Testnet' },
   'base': { name: 'Base', type: 'Mainnet' },
   'base-sepolia': { name: 'Base Sepolia', type: 'Testnet' },
   'radius': { name: 'Radius', type: 'Mainnet' },

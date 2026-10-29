@@ -12,6 +12,8 @@ import express from 'express';
 import { settlePayment } from '../routes/settle';
 import { verifyPayment } from '../routes/verify';
 import { NonceTracker } from '../protection/nonce-tracker';
+import { createRateLimiter } from '../protection/rate-limiter';
+import { createSizeLimiter } from '../protection/size-limiter';
 import {
   createBasePayment,
   createSolanaPayment,
@@ -259,7 +261,6 @@ describe.skip('Gas Estimation Before Settle', () => {
 
 describe('Rate Limiting', () => {
   it('should allow requests under the rate limit', async () => {
-    const { createRateLimiter } = await import('../protection/rate-limiter');
     const limiter = createRateLimiter({ windowMs: 60000, max: 5 });
 
     const app = express();
@@ -279,7 +280,6 @@ describe('Rate Limiting', () => {
   }, 15000);
 
   it('should return 429 when rate limit exceeded', async () => {
-    const { createRateLimiter } = await import('../protection/rate-limiter');
     const limiter = createRateLimiter({ windowMs: 60000, max: 2 });
 
     const app = express();
@@ -299,7 +299,6 @@ describe('Rate Limiting', () => {
   });
 
   it('should include retry-after header when rate limited', async () => {
-    const { createRateLimiter } = await import('../protection/rate-limiter');
     const limiter = createRateLimiter({ windowMs: 60000, max: 1 });
 
     const app = express();
@@ -316,7 +315,6 @@ describe('Rate Limiting', () => {
   });
 
   it('should rate limit per IP address independently', async () => {
-    const { createRateLimiter } = await import('../protection/rate-limiter');
     const limiter = createRateLimiter({ windowMs: 60000, max: 1 });
 
     const app = express();
@@ -340,7 +338,6 @@ describe('Rate Limiting', () => {
 
 describe('Input Size Limiting', () => {
   it('should accept normal-sized request body', async () => {
-    const { createSizeLimiter } = await import('../protection/size-limiter');
 
     const app = express();
     app.use(createSizeLimiter('100kb'));
@@ -354,7 +351,6 @@ describe('Input Size Limiting', () => {
   });
 
   it('should reject request body exceeding size limit', async () => {
-    const { createSizeLimiter } = await import('../protection/size-limiter');
 
     const app = express();
     app.use(createSizeLimiter('1kb'));
@@ -371,7 +367,6 @@ describe('Input Size Limiting', () => {
   });
 
   it('should return meaningful error for oversized payload', async () => {
-    const { createSizeLimiter } = await import('../protection/size-limiter');
 
     const app = express();
     app.use(createSizeLimiter('1kb'));
@@ -393,7 +388,6 @@ describe('Input Size Limiting', () => {
   });
 
   it('should allow exactly at the limit', async () => {
-    const { createSizeLimiter } = await import('../protection/size-limiter');
 
     const app = express();
     // 100kb limit — normal x402 payloads are well under this

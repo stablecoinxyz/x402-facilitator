@@ -2,10 +2,11 @@ import { Request, Response } from 'express';
 import { createWalletClient, createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
-import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, getSuiNetwork, isSuiExactEnabled } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { verifySolanaPayment } from '../solana/verify';
 import { getExactSvmScheme } from '../solana/svm-exact';
+import { getExactSuiScheme, isAllowedSuiAsset, suiAcceptanceBindsRequirements, suiChainVerdict, suiMessageNeedsRedaction, suiTransactionDigest } from '../sui/sui-exact';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
@@ -415,6 +416,156 @@ export async function settlePayment(req: Request, res: Response) {
       }
       recordDuration(startTime, network);
       return res.json(outcome.result);
+    }
+
+    // Route by network — Sui uses CAIP-2 "sui:..." prefix.
+    //
+    // Settle is self-sufficient per #3081: the scheme re-runs the offline
+    // checks, enforces the epoch window, claims the digest, submits, and checks
+    // the executed effects. It is deliberately NOT preceded by verify() — the
+    // protocol defines settle that way, and the extra simulate would diverge
+    // from the reference implementation without changing what the caller sees.
+    //
+    // Dedup is the scheme's claim store, not nonceTracker: the claim is keyed on
+    // (network, digest) and reports `duplicate_settlement`, so success is
+    // reported at most once — unlike the EVM path, which replays its original
+    // success.
+    if (network?.startsWith('sui:')) {
+      log.debug({ network }, 'Sui settlement');
+      const configuredNetwork = getSuiNetwork();
+      if (!isSuiExactEnabled() || network !== configuredNetwork?.caip2) {
+        settleTotal.inc({ network, result: 'sui_exact_disabled' });
+        return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'sui_exact_disabled' });
+      }
+      // Envelope binding, as in /verify: the acceptance must be the offer the
+      // requirements state. The signed bytes fix the transfer; this stops a
+      // caller that inspects `accepted` from being told a different offer was
+      // settled than the one that was.
+      if (!suiAcceptanceBindsRequirements(paymentPayload.accepted, paymentRequirements)) {
+        log.warn({ network }, 'Sui acceptance does not bind the payment requirements');
+        settleTotal.inc({ network, result: 'failed' });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'invalid_payload' });
+      }
+      if (!isAllowedSuiAsset(paymentRequirements?.asset)) {
+        log.warn({ network, asset: paymentRequirements?.asset }, 'Sui asset is not one this facilitator serves');
+        settleTotal.inc({ network, result: 'failed' });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'unsupported_asset' });
+      }
+      const suiMode = resolveSettlementMode();
+      if (suiMode === 'disabled') {
+        log.error({ network, errorReason: 'settlement_disabled' }, 'Settlement refused: ENABLE_REAL_SETTLEMENT is not "true" and ALLOW_SIMULATED_SETTLEMENT is not set');
+        settleTotal.inc({ network, result: 'settlement_disabled' });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'settlement_disabled' });
+      }
+      try {
+        const sui = getExactSuiScheme();
+        if (suiMode === 'simulated') {
+          // Simulated mode must not submit. Verify is the read-only half of the
+          // scheme, so the caller still learns whether the payload would settle.
+          const verified = await sui.verify(paymentPayload, paymentRequirements);
+          if (!verified.isValid) {
+            settleTotal.inc({ network, result: 'failed' });
+            recordDuration(startTime, network);
+            return res.json({ success: false, payer: verified.payer || 'unknown', transaction: '', network, errorReason: verified.invalidReason || 'invalid_payment' });
+          }
+          res.set('X-Settlement-Mode', 'simulated');
+          settleTotal.inc({ network, result: 'simulated' });
+          recordDuration(startTime, network);
+          return res.json({ success: true, payer: verified.payer || 'unknown', transaction: `SIMULATED${Date.now()}`, network });
+        }
+
+        // The scheme's only replay guard is an in-process claim store, so a
+        // restart — every deploy — empties it, and a fullnode answers a
+        // re-submitted, already-executed transaction with its cached effects.
+        // Without asking the chain first, the replay would be reported as a
+        // second success and the resource server would deliver twice for one
+        // payment. The chain is the authority; the claim store is a cache.
+        const verdict = await suiChainVerdict(paymentPayload.payload?.transaction);
+        if (verdict?.state === 'executed' && verdict.succeeded) {
+          log.warn({ network, digest: verdict.digest }, 'Sui transaction already executed on chain; refusing to report a second success');
+          settleTotal.inc({ network, result: 'duplicate_settlement' });
+          recordDuration(startTime, network);
+          return res.json({
+            success: false,
+            payer: verdict.sender || 'unknown',
+            transaction: verdict.digest,
+            network,
+            errorReason: 'duplicate_settlement',
+            errorMessage: `transaction ${verdict.digest} is already executed on chain`,
+          });
+        }
+
+        const settled = await sui.settle(paymentPayload, paymentRequirements);
+        // The scheme answers a duplicate with an empty `transaction`, which
+        // reads as "nothing happened" and would push the payer to sign a second
+        // payment. The claim that failed is keyed on this payload's digest, so
+        // report it: an answer after broadcast never omits the hash.
+        const submittedDigest =
+          settled.transaction || (await suiTransactionDigest(paymentPayload.payload?.transaction)) || verdict?.digest || '';
+        let response =
+          !settled.success && settled.errorReason === 'duplicate_settlement' && !settled.transaction
+            ? { ...settled, transaction: submittedDigest }
+            : settled;
+
+        // `transaction_failed` is the scheme's code for "I could not tell what
+        // happened". It covers a receipt it could not read, a submit that threw
+        // after broadcast, and failures that never left this process. The chain
+        // decides which: executed-and-succeeded is not a failure at all,
+        // executed-and-failed is terminal, absent means nothing was broadcast,
+        // and an unreadable chain is the one case that stays non-terminal.
+        if (!response.success && response.errorReason === 'transaction_failed') {
+          const after = await suiChainVerdict(paymentPayload.payload?.transaction);
+          const digest = after?.digest || submittedDigest;
+          if (after?.state === 'executed' && after.succeeded) {
+            log.warn({ network, digest }, 'Sui reported failure for a transaction the chain executed successfully');
+            response = {
+              ...response,
+              transaction: digest,
+              errorReason: 'duplicate_settlement',
+              errorMessage: `transaction ${digest} is already executed on chain; do not re-authorize`,
+            };
+          } else if (after?.state === 'executed') {
+            // Confirmed on-chain failure: terminal, and the payer may retry.
+            response = { ...response, transaction: digest };
+          } else if (after?.state === 'absent') {
+            // Read the chain, found nothing: nothing was broadcast, so a
+            // terminal failure is accurate and a retry is safe.
+            log.warn({ network, digest }, 'Sui settlement failed before reaching the chain');
+            response = { ...response, transaction: digest };
+          } else {
+            log.warn({ network, digest }, 'Sui settlement outcome unknown after broadcast; reporting pending');
+            response = {
+              ...response,
+              transaction: digest,
+              errorReason: 'settlement_pending',
+              errorMessage: 'the transaction may have been broadcast and its outcome is not yet known; reconcile the digest before a new authorization',
+            };
+          }
+        }
+
+        // Transport and node text never reaches a caller: it can carry the gRPC
+        // endpoint, which carries the provider key on most providers.
+        if (suiMessageNeedsRedaction(response.errorReason)) {
+          log.warn({ network, errorReason: response.errorReason, detail: response.errorMessage }, 'Sui settlement detail withheld from the caller');
+          response = { ...response, errorMessage: 'the Sui network did not complete the settlement; see the facilitator log' };
+        }
+
+        settleTotal.inc({ network, result: response.success ? 'success' : 'failed' });
+        recordDuration(startTime, network);
+        log.info({ action: 'settle', network, success: response.success, transaction: response.transaction }, 'Settle complete');
+        return res.json(response);
+      } catch (suiErr) {
+        // The scheme answers every failure it can observe itself, carrying the
+        // digest when a transaction was broadcast. A throw that reaches here is
+        // therefore pre-broadcast, so an empty `transaction` is accurate.
+        log.warn({ err: suiErr, network }, 'Sui settlement error');
+        settleTotal.inc({ network, result: 'failed' });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'transaction_failed' });
+      }
     }
 
     // Resolve EVM network from CAIP-2 identifier

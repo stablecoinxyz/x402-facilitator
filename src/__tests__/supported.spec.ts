@@ -51,7 +51,13 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
         expect(kind.scheme).toBe('exact');
         expect(typeof kind.network).toBe('string');
         expect(typeof kind.extra).toBe('object');
-        expect(kind.extra).toHaveProperty('assetTransferMethod');
+        if (kind.network.startsWith('sui:')) {
+          // Sui `exact` advertises no extra: the facilitator issues no nonce and
+          // configures no fee payer in phase 1.
+          expect(kind.extra).toEqual({});
+        } else {
+          expect(kind.extra).toHaveProperty('assetTransferMethod');
+        }
       });
     });
 
@@ -65,6 +71,8 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
         'eip155:723487',
         'eip155:72344',
         'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        'sui:mainnet',
+        'sui:testnet',
       ];
       const validV1Networks = ['base', 'base-sepolia', 'radius', 'radius-testnet', 'solana-mainnet-beta'];
 
@@ -188,7 +196,7 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       expect(v2Kinds.length).toBeGreaterThan(0);
       v2Kinds.forEach((kind: any) => {
         // Should be CAIP-2 like "eip155:8453", not "base" or "8453"
-        expect(kind.network).toMatch(/^(eip155:\d+|solana:.+)$/);
+        expect(kind.network).toMatch(/^(eip155:\d+|solana:.+|sui:.+)$/);
       });
     });
 
@@ -259,6 +267,13 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       const response = await request(app).get('/supported');
 
       response.body.kinds?.forEach((kind: any) => {
+        if (kind.network.startsWith('sui:')) {
+          // Sui `exact` carries no assetTransferMethod: the scheme is neither
+          // permit nor delegated-transfer, and the facilitator advertises no
+          // extra in phase 1.
+          expect(kind.extra).toEqual({});
+          return;
+        }
         expect(kind.extra).toHaveProperty('assetTransferMethod');
         expect(kind.extra).toHaveProperty('name');
         expect(kind.extra).toHaveProperty('version');

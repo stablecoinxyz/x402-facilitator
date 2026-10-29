@@ -49,6 +49,12 @@ export const config = {
   solanaFacilitatorAddress: process.env.SOLANA_FACILITATOR_ADDRESS || process.env.FACILITATOR_SOLANA_ADDRESS || '',
   solanaSvmExactEnabled: process.env.SOLANA_SVM_EXACT_ENABLED === 'true',
   solanaSvmNetwork: process.env.SOLANA_SVM_NETWORK || '',
+
+  // Sui Configuration. Exact is an explicit opt-in, same shape as SVM: keys and
+  // a URL alone never expose a settlement capability.
+  suiExactEnabled: process.env.SUI_EXACT_ENABLED === 'true',
+  suiNetwork: process.env.SUI_NETWORK || '',
+  suiGrpcUrl: process.env.SUI_GRPC_URL || '',
   sbcTokenAddress: process.env.SBC_TOKEN_ADDRESS || 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
   sbcDecimals: 9,
 };
@@ -71,6 +77,38 @@ export function getSolanaSvmNetwork() {
 /** True only when an operator deliberately selects a supported SVM network. */
 export function isSolanaSvmExactEnabled(): boolean {
   return config.solanaSvmExactEnabled && Boolean(getSolanaSvmNetwork());
+}
+
+/** CAIP-2 identifiers for Sui. */
+export const SUI_MAINNET_CAIP2 = 'sui:mainnet';
+export const SUI_TESTNET_CAIP2 = 'sui:testnet';
+
+/** Circle native USDC coin types, full-length addresses per the x402 registry. */
+export const SUI_USDC_MAINNET = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
+export const SUI_USDC_TESTNET = '0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC';
+
+/**
+ * Sui networks this facilitator will serve, keyed by CAIP-2 id.
+ *
+ * `SUI_NETWORK` is matched verbatim against these keys — CAIP-2 only, no
+ * friendly-name aliases (repo rule). A typo therefore fails at boot instead of
+ * silently matching nothing, and there is no second naming convention to drift.
+ */
+export const SUI_NETWORKS: Record<string, { caip2: string; asset: string; decimals: number }> = {
+  [SUI_MAINNET_CAIP2]: { caip2: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET, decimals: 6 },
+  [SUI_TESTNET_CAIP2]: { caip2: SUI_TESTNET_CAIP2, asset: SUI_USDC_TESTNET, decimals: 6 },
+};
+
+/** The configured Sui network, or null when the env value is not one of ours. */
+export function getSuiNetwork() {
+  return Object.prototype.hasOwnProperty.call(SUI_NETWORKS, config.suiNetwork)
+    ? SUI_NETWORKS[config.suiNetwork]
+    : null;
+}
+
+/** True only when an operator deliberately selects a supported Sui network. */
+export function isSuiExactEnabled(): boolean {
+  return config.suiExactEnabled && Boolean(getSuiNetwork());
 }
 
 /**
@@ -154,6 +192,16 @@ if (config.solanaFacilitatorPrivateKey && !config.solanaFacilitatorAddress) {
 }
 if (config.solanaSvmExactEnabled && !getSolanaSvmNetwork()) {
   throw new Error('SOLANA_SVM_NETWORK must explicitly be solana, solana-devnet, or solana-testnet when SOLANA_SVM_EXACT_ENABLED=true');
+}
+
+// Validate Sui config (optional — only if Sui is being used). Both failures are
+// startup errors: an enabled Sui network without a gRPC endpoint cannot verify
+// or settle anything, and silently serving nothing is worse than refusing to boot.
+if (config.suiExactEnabled && !getSuiNetwork()) {
+  throw new Error('SUI_NETWORK must be exactly sui:mainnet or sui:testnet when SUI_EXACT_ENABLED=true');
+}
+if (config.suiExactEnabled && !config.suiGrpcUrl) {
+  throw new Error('SUI_GRPC_URL is required when SUI_EXACT_ENABLED=true');
 }
 
 // Startup log is emitted by server.ts with structured logger

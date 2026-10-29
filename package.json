@@ -34,9 +34,12 @@
     "smoke:solana": "tsx scripts/smoke-solana-mainnet.ts",
     "smoke:solana:live": "tsx scripts/smoke-solana-settle-live.ts",
     "prove:svm-devnet": "tsx scripts/prove-svm-exact-devnet.ts",
-    "prove:svm-mainnet": "tsx scripts/prove-svm-exact-mainnet.ts"
+    "prove:svm-mainnet": "tsx scripts/prove-svm-exact-mainnet.ts",
+    "prove:sui-testnet": "SUI_EXACT_ENABLED=true SUI_NETWORK=sui:testnet SUI_GRPC_URL=${SUI_GRPC_URL:-https://fullnode.testnet.sui.io:443} tsx scripts/prove-sui-exact.ts",
+    "prove:sui-mainnet": "SUI_EXACT_ENABLED=true SUI_NETWORK=sui:mainnet SUI_GRPC_URL=${SUI_GRPC_URL:-https://fullnode.mainnet.sui.io:443} tsx scripts/prove-sui-exact.ts"
   },
   "dependencies": {
+    "@mysten/sui": "2.38.0",
     "@solana/kit": "^5.1.0",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
@@ -53,6 +56,7 @@
     "viem": "2.43.5"
   },
   "devDependencies": {
+    "@babel/plugin-transform-modules-commonjs": "^7.29.7",
     "@types/cors": "2.8.19",
     "@types/express": "4.17.25",
     "@types/jest": "29.5.14",

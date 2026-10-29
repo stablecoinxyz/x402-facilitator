@@ -18,7 +18,22 @@ process.env.BASE_SEPOLIA_FACILITATOR_ADDRESS = process.env.BASE_SEPOLIA_FACILITA
 
 module.exports = {
   setupFiles: ['./jest.setup.js'],
-  preset: 'ts-jest',
+  // `@mysten/sui` publishes ESM only (`.mjs`, no CJS build). Node >= 20.19 can
+  // `require()` it, but jest 29's module registry cannot, so its files are
+  // transformed to CommonJS for the test run. Production is unaffected: the
+  // compiled server requires the package directly under Node.
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.json' }],
+    'node_modules/@(?:mysten|noble|scure)/.+\\.(?:mjs|js)$': [
+      'babel-jest',
+      {
+        babelrc: false,
+        configFile: false,
+        plugins: ['@babel/plugin-transform-modules-commonjs'],
+      },
+    ],
+  },
+  transformIgnorePatterns: ['/node_modules/(?!(@mysten|@noble|@scure)/)'],
   testEnvironment: 'node',
   // Isolate each test file in its own worker to prevent Solana RPC rate limit
   // state from leaking across suites and causing flaky failures.

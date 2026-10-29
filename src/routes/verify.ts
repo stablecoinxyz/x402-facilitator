@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
 import { createPublicClient, http, verifyTypedData } from 'viem';
 import type { Logger } from 'pino';
-import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, getSuiNetwork, isSuiExactEnabled } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
 import { getExactSvmScheme } from '../solana/svm-exact';
+import { getExactSuiScheme, isAllowedSuiAsset, suiAcceptanceBindsRequirements, suiMessageNeedsRedaction } from '../sui/sui-exact';
 import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
 import { parseAmount } from '../lib/amount';
@@ -262,6 +263,63 @@ export async function verifyPayment(req: Request, res: Response) {
           isValid: false,
           payer,
           invalidReason: 'invalid_solana_signature',
+        });
+      }
+    }
+
+    // Route by network — Sui uses CAIP-2 "sui:..." prefix.
+    //
+    // Two checks precede the scheme: our opt-in gate (an enabled config serves
+    // exactly one network), and our asset policy. The asset check is ours, not
+    // the spec's: verification is effects-only, so the scheme would happily
+    // approve a transfer of any coin type. Without it we would settle payments
+    // denominated in arbitrary Sui tokens.
+    if (network?.startsWith('sui:')) {
+      log.debug({ network }, 'Sui payment detected');
+      const configuredNetwork = getSuiNetwork();
+      if (!isSuiExactEnabled() || network !== configuredNetwork?.caip2) {
+        verifyTotal.inc({ network, result: 'invalid' });
+        return res.json({ isValid: false, payer: 'unknown', invalidReason: 'sui_exact_disabled' });
+      }
+      // Envelope binding: the acceptance the client echoes back must be the
+      // same offer the requirements state. The money check runs on the chain
+      // effects, but a resource server that reads `accepted` must not be told a
+      // different offer was checked than the one that was.
+      if (!suiAcceptanceBindsRequirements(paymentPayload.accepted, paymentRequirements)) {
+        log.warn({ network }, 'Sui acceptance does not bind the payment requirements');
+        verifyTotal.inc({ network, result: 'invalid' });
+        recordDuration(startTime, network);
+        return res.json({ isValid: false, payer: 'unknown', invalidReason: 'invalid_payload' });
+      }
+      if (!isAllowedSuiAsset(paymentRequirements?.asset)) {
+        log.warn({ network, asset: paymentRequirements?.asset }, 'Sui asset is not one this facilitator serves');
+        verifyTotal.inc({ network, result: 'invalid' });
+        recordDuration(startTime, network);
+        return res.json({ isValid: false, payer: 'unknown', invalidReason: 'unsupported_asset' });
+      }
+      try {
+        const result = await getExactSuiScheme().verify(paymentPayload, paymentRequirements);
+        verifyTotal.inc({ network, result: result.isValid ? 'valid' : 'invalid' });
+        recordDuration(startTime, network);
+        log.info({ action: 'verify', network, success: result.isValid, payer: result.payer }, 'Verify complete');
+        // Transport and node text never reaches a caller: it can carry the gRPC
+        // endpoint, which carries the provider key on most providers.
+        if (suiMessageNeedsRedaction(result.invalidReason)) {
+          log.warn({ network, invalidReason: result.invalidReason, detail: result.invalidMessage }, 'Sui verification detail withheld from the caller');
+          return res.json({
+            ...result,
+            invalidMessage: 'the Sui network did not complete the request; see the facilitator log',
+          });
+        }
+        return res.json(result);
+      } catch (suiErr) {
+        log.warn({ err: suiErr, network }, 'Sui verification error');
+        verifyTotal.inc({ network, result: 'invalid' });
+        recordDuration(startTime, network);
+        return res.json({
+          isValid: false,
+          payer: 'unknown',
+          invalidReason: 'invalid_exact_sui_payload_verification_error',
         });
       }
     }
