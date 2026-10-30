@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network, getSuiNetworks, isSuiExactEnabled } from '../config';
+import { CASPER_MAINNET_CAIP2, CASPER_TESTNET_CAIP2 } from '../casper/networks';
 
 /**
  * GET /supported - x402 V2 Capability Discovery
@@ -76,6 +77,18 @@ export function getSupportedNetworks(req: Request, res: Response) {
     }
   }
 
+  // Add Casper mainnet if configured
+  if (config.casperFacilitatorAddress && config.casperWcsprContract) {
+    addKind(CASPER_MAINNET_CAIP2, { assetTransferMethod: 'cep18-transfer', name: 'wCSPR', version: '1' });
+    addSigner(signers, 'casper:*', config.casperFacilitatorAddress);
+  }
+
+  // Add Casper testnet if configured
+  if (config.casperFacilitatorAddress && config.casperTestnetWcsprContract) {
+    addKind(CASPER_TESTNET_CAIP2, { assetTransferMethod: 'cep18-transfer', name: 'wCSPR', version: '1' });
+    addSigner(signers, 'casper:*', config.casperFacilitatorAddress);
+  }
+
   // SupportedResponse advertises extension identifiers. The extension's schema
   // and client data live in the PaymentRequired/PAYMENT-SIGNATURE envelopes.
   const hasEvm = Object.keys(signers).some(k => k === 'eip155:*');
@@ -102,6 +115,8 @@ const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
   'solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z': { name: 'Solana Testnet', type: 'Testnet' },
   'sui:mainnet': { name: 'Sui', type: 'Mainnet' },
   'sui:testnet': { name: 'Sui Testnet', type: 'Testnet' },
+  'casper:casper': { name: 'Casper', type: 'Mainnet' },
+  'casper:casper-test': { name: 'Casper', type: 'Testnet' },
   'base': { name: 'Base', type: 'Mainnet' },
   'base-sepolia': { name: 'Base Sepolia', type: 'Testnet' },
   'radius': { name: 'Radius', type: 'Mainnet' },
@@ -110,6 +125,8 @@ const NETWORK_LABELS: Record<string, { name: string; type: string }> = {
   'solana': { name: 'Solana', type: 'Mainnet' },
   'solana-devnet': { name: 'Solana Devnet', type: 'Testnet' },
   'solana-testnet': { name: 'Solana Testnet', type: 'Testnet' },
+  'casper': { name: 'Casper', type: 'Mainnet' },
+  'casper-test': { name: 'Casper', type: 'Testnet' },
 };
 
 function renderSupportedHTML(data: {
