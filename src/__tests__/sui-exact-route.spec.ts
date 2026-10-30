@@ -457,9 +457,11 @@ describe('Sui Exact routes', () => {
         expect(response.body.errorMessage).not.toContain('MoveAbort');
       });
 
-      it('stays terminal when the chain was read and holds no such transaction', async () => {
-        // Absent is knowledge, not ignorance: nothing was broadcast, so telling
-        // the payer to retry is accurate.
+      it('answers settlement_pending, not a terminal failure, when the chain holds no such transaction', async () => {
+        // A not-found is not proof that nothing was broadcast: a node that took
+        // the bytes and lost the receipt, or one still indexing, answers the
+        // same way a rejection does. A terminal answer would invite a second
+        // authorization for a payment that lands.
         settle.mockResolvedValueOnce({
           success: false,
           payer: 'payer',
@@ -471,7 +473,8 @@ describe('Sui Exact routes', () => {
           .mockResolvedValueOnce({ state: 'unknown', digest: DIGEST, sender: 'payer' })
           .mockResolvedValueOnce({ state: 'absent', digest: DIGEST, sender: 'payer' });
         const response = await request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
-        expect(response.body).toMatchObject({ success: false, errorReason: 'transaction_failed', transaction: DIGEST });
+        expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: DIGEST });
+        expect(response.body.errorMessage).toContain('reconcile the digest');
       });
 
       it('reports duplicate_settlement when the chain holds a success the scheme called failed', async () => {
@@ -617,6 +620,56 @@ describe('Sui Exact routes', () => {
       const response = await request(app()).post('/settle').send(withNetwork('sui:devnet'));
       expect(response.body).toMatchObject({ success: false, errorReason: 'sui_exact_disabled' });
       expect(settle).not.toHaveBeenCalled();
+    });
+
+    it('refuses a network name that differs only in case or whitespace', async () => {
+      const server = app();
+      // Neither is a Sui network by our prefix test, and neither may fall
+      // through to a money path as if it were one.
+      const upper = await request(server).post('/verify').send(withNetwork('SUI:testnet'));
+      const padded = await request(server).post('/verify').send(withNetwork('sui:testnet '));
+
+      expect(upper.body).toMatchObject({ isValid: false, invalidReason: 'invalid_network' });
+      expect(padded.body).toMatchObject({ isValid: false, invalidReason: 'sui_exact_disabled' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(settle).not.toHaveBeenCalled();
+    });
+
+    it('advertises a network listed twice exactly once', async () => {
+      config.suiNetworks = [SUI_TESTNET_CAIP2, SUI_MAINNET_CAIP2, SUI_TESTNET_CAIP2];
+      const response = await request(app()).get('/supported');
+      const suiKinds = response.body.kinds.filter((k: { network: string }) => k.network.startsWith('sui'));
+      // Order follows SUI_NETWORKS; the duplicate contributes nothing.
+      expect(suiKinds.map((k: { network: string }) => k.network)).toEqual([
+        SUI_TESTNET_CAIP2,
+        SUI_MAINNET_CAIP2,
+      ]);
+    });
+
+    it('keeps a cross-network relabel terminal and digestless when nothing was sent', async () => {
+      // The bytes a testnet payment carries, relabelled as a mainnet payment.
+      // The mainnet node is asked; it holds nothing, and the scheme then refuses
+      // offline. No money moved, so the answer must not claim a transaction.
+      verdict.mockResolvedValue({ state: 'absent', digest: DIGEST, sender: 'payer' });
+      settle.mockResolvedValue({
+        success: false,
+        errorReason: 'invalid_exact_sui_payload_invalid_expiration',
+        errorMessage: 'current epoch 1296 is outside the transaction\'s window 1267..1268',
+        transaction: '',
+        network: SUI_MAINNET_CAIP2,
+        payer: 'payer',
+      });
+
+      const response = await request(app())
+        .post('/settle')
+        .send({
+          paymentPayload: { ...paymentPayload, accepted: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET } },
+          paymentRequirements: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET },
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ success: false, transaction: '', network: SUI_MAINNET_CAIP2 });
+      expect(verdict.mock.calls.map((call) => call[1])).toEqual([SUI_MAINNET_CAIP2]);
     });
   });
 });

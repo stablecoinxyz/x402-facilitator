@@ -511,10 +511,15 @@ export async function settlePayment(req: Request, res: Response) {
 
         // `transaction_failed` is the scheme's code for "I could not tell what
         // happened". It covers a receipt it could not read, a submit that threw
-        // after broadcast, and failures that never left this process. The chain
-        // decides which: executed-and-succeeded is not a failure at all,
-        // executed-and-failed is terminal, absent means nothing was broadcast,
-        // and an unreadable chain is the one case that stays non-terminal.
+        // after broadcast, and failures that never left this process — and the
+        // route cannot tell those apart, because every one of them leaves the
+        // same shape. The chain decides: executed-and-succeeded is not a failure
+        // at all, and executed-and-failed is terminal. But "the chain holds no
+        // such transaction" is NOT proof that nothing was broadcast: a node that
+        // accepted the bytes and then lost the receipt, or a fullnode that has
+        // not finished indexing, answers the same not-found as a rejection. Only
+        // a confirmed on-chain failure is terminal after a broadcast, so absent
+        // and unreadable both stay non-terminal.
         if (!response.success && response.errorReason === 'transaction_failed') {
           const after = await suiChainVerdict(paymentPayload.payload?.transaction, network);
           const digest = after?.digest || submittedDigest;
@@ -529,13 +534,11 @@ export async function settlePayment(req: Request, res: Response) {
           } else if (after?.state === 'executed') {
             // Confirmed on-chain failure: terminal, and the payer may retry.
             response = { ...response, transaction: digest };
-          } else if (after?.state === 'absent') {
-            // Read the chain, found nothing: nothing was broadcast, so a
-            // terminal failure is accurate and a retry is safe.
-            log.warn({ network, digest }, 'Sui settlement failed before reaching the chain');
-            response = { ...response, transaction: digest };
           } else {
-            log.warn({ network, digest }, 'Sui settlement outcome unknown after broadcast; reporting pending');
+            // Absent or unreadable. A digest the chain does not hold may still
+            // be queued, so a terminal answer here would invite a second
+            // authorization for a payment that lands.
+            log.warn({ network, digest, state: after?.state ?? 'unread' }, 'Sui settlement outcome not confirmed after broadcast; reporting pending');
             response = {
               ...response,
               transaction: digest,

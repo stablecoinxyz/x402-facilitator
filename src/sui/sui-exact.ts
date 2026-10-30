@@ -130,6 +130,10 @@ export type SuiChainVerdict =
  * @returns The chain's answer, or null when the bytes do not decode
  */
 export async function suiChainVerdict(transaction: unknown, caip2: string): Promise<SuiChainVerdict | null> {
+  // Resolved before the try blocks on purpose: a network with no client is a
+  // wiring error, and swallowing it into `unknown` would report a payment as
+  // merely pending forever instead of failing loudly.
+  const client = suiClient(caip2);
   if (typeof transaction !== 'string' || transaction.length === 0) return null;
   let digest: string;
   let sender: string;
@@ -141,14 +145,14 @@ export async function suiChainVerdict(transaction: unknown, caip2: string): Prom
     return null;
   }
   try {
-    const executed = await suiClient(caip2).core.getTransaction({ digest });
+    const executed = await client.core.getTransaction({ digest });
     return { state: 'executed', digest, sender, succeeded: executed.$kind === 'Transaction' };
   } catch {
     // The lookup failed. Was that because the transaction is not there, or
     // because the chain is not answering? A chain that cannot answer this
     // either has told us nothing.
     try {
-      await suiClient(caip2).core.getChainIdentifier();
+      await client.core.getChainIdentifier();
       return { state: 'absent', digest, sender };
     } catch {
       return { state: 'unknown', digest, sender };

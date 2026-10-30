@@ -3,7 +3,7 @@ import cors from 'cors';
 import logger from './lib/logger';
 import { metricsHandler } from './lib/metrics';
 import { requestIdMiddleware } from './middleware/requestId';
-import { config } from './config';
+import { config, getSuiGrpcUrl, getSuiNetworks, isSuiExactEnabled } from './config';
 import { createRateLimiter } from './protection/rate-limiter';
 import { createSizeLimiter } from './protection/size-limiter';
 import { verifyPayment } from './routes/verify';
@@ -54,6 +54,16 @@ function rpcHost(url: string | undefined): string {
 }
 
   const server = app.listen(port, () => {
+    // Which Sui networks this process will answer for, and the host of each
+    // node it will ask. A swapped mainnet/testnet endpoint boots clean and
+    // silently answers the replay check from the wrong chain, so the loaded
+    // pairs have to be readable from the running process. Host only.
+    const suiNetworks = isSuiExactEnabled()
+      ? getSuiNetworks().map((network) => ({
+          network: network.caip2,
+          grpcHost: rpcHost(getSuiGrpcUrl(network.caip2)),
+        }))
+      : [];
     logger.info({
       port,
       // Announce the RPC endpoints this process actually loaded. An operator
@@ -63,6 +73,7 @@ function rpcHost(url: string | undefined): string {
       rpc: {
         solana: rpcHost(config.solanaRpcUrl),
         base: rpcHost(config.baseRpcUrl),
+        sui: suiNetworks,
       },
       settlement: resolveSettlementMode(),
       networks: {
