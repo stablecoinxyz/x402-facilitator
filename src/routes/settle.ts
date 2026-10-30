@@ -5,6 +5,9 @@ import type { Logger } from 'pino';
 import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, isSuiExactEnabled, isSuiNetworkServed } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { verifySolanaPayment } from '../solana/verify';
+import { settleCasperPayment } from '../casper/settle';
+import { casperAsset, verifyCasperPayment } from '../casper/verify';
+import { isCasperNetwork } from '../casper/networks';
 import { getExactSvmScheme } from '../solana/svm-exact';
 import { getExactSuiScheme, isAllowedSuiAsset, suiAcceptanceBindsRequirements, suiChainVerdict, suiMessageNeedsRedaction, suiTransactionDigest } from '../sui/sui-exact';
 import { nonceTracker } from '../protection/nonce-tracker';
@@ -134,6 +137,11 @@ function isV1Payload(payload: any): boolean {
 function normalizeV1ToV2(payload: any, requirements: any): any {
   const network = requirements?.network || 'unknown';
   const scheme = requirements?.scheme || 'exact';
+
+  // Casper payloads are not Solana payloads; preserve mechanism-specific fields.
+  if (isCasperNetwork(toCaip2Network(network))) {
+    return { x402Version: 1, accepted: { scheme, network }, payload: { ...payload }, extensions: {} };
+  }
 
   const isSolana = network?.startsWith('solana:') ||
     (payload.from && !payload.from.startsWith('0x'));
@@ -416,6 +424,49 @@ export async function settlePayment(req: Request, res: Response) {
       }
       recordDuration(startTime, network);
       return res.json(outcome.result);
+    }
+
+    // Route by network — Casper uses CAIP-2 "casper:..." prefix.
+    //
+    // Settlement is executed by the Casper facilitator service, which submits a
+    // CEP-18 transfer_with_authorization; the token contract consumes the signed
+    // nonce on chain, so a replayed payload cannot move funds twice.
+    if (isCasperNetwork(network)) {
+      const payer = paymentPayload.payload?.from || 'unknown';
+      // Match /supported: both the facilitator and this network's contract are required.
+      if (!config.casperFacilitatorAddress || !casperAsset(network)) {
+        log.warn({ payer, network }, 'Casper network is not configured');
+        settleTotal.inc({ network, result: 'failed' });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer, transaction: '', network, errorReason: 'invalid_network' });
+      }
+      const casperMode = resolveSettlementMode();
+      if (casperMode === 'disabled') {
+        log.error({ payer, network, errorReason: 'settlement_disabled' }, 'Settlement refused: ENABLE_REAL_SETTLEMENT is not "true" and ALLOW_SIMULATED_SETTLEMENT is not set');
+        settleTotal.inc({ network, result: 'settlement_disabled' });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer, transaction: '', network, errorReason: 'settlement_disabled' });
+      }
+      if (casperMode === 'simulated') {
+        // Simulated mode must not forward to the facilitator service, which
+        // settles for real. Verify is the read-only half.
+        const verified = await verifyCasperPayment(paymentPayload.payload, paymentRequirements, network, log);
+        if (!verified.isValid) {
+          settleTotal.inc({ network, result: 'failed' });
+          recordDuration(startTime, network);
+          return res.json({ success: false, payer: verified.payer, transaction: '', network, errorReason: verified.invalidReason || 'invalid_payment' });
+        }
+        res.set('X-Settlement-Mode', 'simulated');
+        settleTotal.inc({ network, result: 'simulated' });
+        recordDuration(startTime, network);
+        return res.json({ success: true, payer: verified.payer, transaction: `SIMULATED${Date.now()}`, network });
+      }
+      log.debug({ network }, 'Casper settlement (wCSPR CEP-18 transfer)');
+      const result = await settleCasperPayment(paymentPayload.payload, paymentRequirements, network, log);
+      settleTotal.inc({ network, result: result.success ? 'success' : 'failed' });
+      recordDuration(startTime, network);
+      log.info({ action: 'settle', network, success: result.success, payer: result.payer, txHash: result.transaction }, 'Settle complete');
+      return res.json(result);
     }
 
     // Route by network — Sui uses CAIP-2 "sui:..." prefix.

@@ -14,6 +14,8 @@ Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 sup
 | Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | Permit2 + canonical x402 proxy |
 | Radius | `eip155:723487` | `RADIUS_` | Permit2 + canonical x402 proxy |
 | Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | Permit2 + canonical x402 proxy |
+| Casper | `casper:casper` | `CASPER_` | wCSPR (CEP-18) transfer via Casper facilitator |
+| Casper Testnet | `casper:casper-test` | `CASPER_TESTNET_` | wCSPR (CEP-18) transfer via Casper facilitator |
 
 Each network has its own env vars — mainnets and testnets can be configured simultaneously.
 
