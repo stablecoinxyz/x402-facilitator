@@ -1,6 +1,6 @@
 import express from 'express';
 import request from 'supertest';
-import { config, SUI_TESTNET_CAIP2, SUI_USDC_TESTNET } from '../config';
+import { config, SUI_MAINNET_CAIP2, SUI_TESTNET_CAIP2, SUI_USDC_MAINNET, SUI_USDC_TESTNET } from '../config';
 import { verifyPayment } from '../routes/verify';
 import { settlePayment } from '../routes/settle';
 import { getSupportedNetworks } from '../routes/supported';
@@ -60,8 +60,8 @@ function withNetwork(network: string) {
 describe('Sui Exact routes', () => {
   const original = {
     enabled: config.suiExactEnabled,
-    network: config.suiNetwork,
-    grpcUrl: config.suiGrpcUrl,
+    networks: config.suiNetworks,
+    grpcUrls: config.suiGrpcUrls,
     real: process.env.ENABLE_REAL_SETTLEMENT,
     simulated: process.env.ALLOW_SIMULATED_SETTLEMENT,
   };
@@ -78,16 +78,16 @@ describe('Sui Exact routes', () => {
     verdict.mockReset().mockResolvedValue({ state: 'unknown', digest: DIGEST, sender: 'payer' });
     scheme.mockReset().mockReturnValue({ verify, settle });
     config.suiExactEnabled = true;
-    config.suiNetwork = SUI_TESTNET_CAIP2;
-    config.suiGrpcUrl = 'https://fullnode.testnet.sui.io:443';
+    config.suiNetworks = [SUI_TESTNET_CAIP2];
+    config.suiGrpcUrls = { ...config.suiGrpcUrls, [SUI_TESTNET_CAIP2]: 'https://fullnode.testnet.sui.io:443' };
     process.env.ENABLE_REAL_SETTLEMENT = 'true';
     delete process.env.ALLOW_SIMULATED_SETTLEMENT;
   });
 
   afterAll(() => {
     config.suiExactEnabled = original.enabled;
-    config.suiNetwork = original.network;
-    config.suiGrpcUrl = original.grpcUrl;
+    config.suiNetworks = original.networks;
+    config.suiGrpcUrls = original.grpcUrls;
     process.env.ENABLE_REAL_SETTLEMENT = original.real;
     if (original.simulated === undefined) delete process.env.ALLOW_SIMULATED_SETTLEMENT;
     else process.env.ALLOW_SIMULATED_SETTLEMENT = original.simulated;
@@ -119,7 +119,7 @@ describe('Sui Exact routes', () => {
     });
 
     it('rejects a network name that is not CAIP-2 rather than guessing', async () => {
-      config.suiNetwork = 'sui-testnet';
+      config.suiNetworks = ['sui-testnet'];
       const response = await request(app()).post('/verify').send({ paymentPayload, paymentRequirements: requirements });
       expect(response.body).toMatchObject({ isValid: false, invalidReason: 'sui_exact_disabled' });
       expect(verify).not.toHaveBeenCalled();
@@ -157,10 +157,10 @@ describe('Sui Exact routes', () => {
       const allowed = jest.requireActual('../sui/sui-exact').isAllowedSuiAsset;
       // Neither is USDC, so both are refused — but the point is that the policy
       // compares coin identity, not spelling: swap in the USDC pair to see a pass.
-      expect(allowed(short)).toBe(false);
-      expect(allowed(full)).toBe(false);
-      expect(allowed(SUI_USDC_TESTNET)).toBe(true);
-      expect(allowed('0xnot-a-struct-tag')).toBe(false);
+      expect(allowed(SUI_TESTNET_CAIP2, short)).toBe(false);
+      expect(allowed(SUI_TESTNET_CAIP2, full)).toBe(false);
+      expect(allowed(SUI_TESTNET_CAIP2, SUI_USDC_TESTNET)).toBe(true);
+      expect(allowed(SUI_TESTNET_CAIP2, '0xnot-a-struct-tag')).toBe(false);
     });
   });
 
@@ -538,6 +538,85 @@ describe('Sui Exact routes', () => {
       const response = await request(app()).get('/supported');
       const suiKinds = response.body.kinds.filter((k: { network: string }) => k.network.startsWith('sui'));
       expect(suiKinds).toEqual([{ x402Version: 2, scheme: 'exact', network: SUI_TESTNET_CAIP2, extra: {} }]);
+    });
+  });
+
+  describe('two networks served at once', () => {
+    beforeEach(() => {
+      config.suiNetworks = [SUI_MAINNET_CAIP2, SUI_TESTNET_CAIP2];
+      config.suiGrpcUrls = {
+        ...config.suiGrpcUrls,
+        [SUI_MAINNET_CAIP2]: 'https://fullnode.mainnet.sui.io:443',
+        [SUI_TESTNET_CAIP2]: 'https://fullnode.testnet.sui.io:443',
+      };
+    });
+
+    it('advertises one kind per served network, mainnet first', async () => {
+      const response = await request(app()).get('/supported');
+      const suiKinds = response.body.kinds.filter((k: { network: string }) => k.network.startsWith('sui'));
+      expect(suiKinds).toEqual([
+        { x402Version: 2, scheme: 'exact', network: SUI_MAINNET_CAIP2, extra: {} },
+        { x402Version: 2, scheme: 'exact', network: SUI_TESTNET_CAIP2, extra: {} },
+      ]);
+    });
+
+    it('settles a mainnet payment and a testnet payment through the same scheme', async () => {
+      const server = app();
+      const mainnet = await request(server)
+        .post('/settle')
+        .send({
+          paymentPayload: { ...paymentPayload, accepted: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET } },
+          paymentRequirements: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET },
+        });
+      const testnet = await request(server).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
+
+      expect(mainnet.body).toMatchObject({ success: true, transaction: DIGEST });
+      expect(testnet.body).toMatchObject({ success: true, transaction: DIGEST });
+      expect(settle).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives the chain verdict the payload network, so the right node answers', async () => {
+      const server = app();
+      await request(server)
+        .post('/settle')
+        .send({
+          paymentPayload: { ...paymentPayload, accepted: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET } },
+          paymentRequirements: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET },
+        });
+      await request(server).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
+
+      // A single client would be wrong for one of these: the lookup must name
+      // the network the payment is denominated in.
+      expect(verdict.mock.calls.map((call) => call[1])).toEqual([SUI_MAINNET_CAIP2, SUI_TESTNET_CAIP2]);
+    });
+
+    it('refuses mainnet USDC denominated as testnet, and testnet USDC denominated as mainnet', async () => {
+      const server = app();
+      const mainnetAssetOnTestnet = await request(server)
+        .post('/verify')
+        .send({
+          paymentPayload: { ...paymentPayload, accepted: { ...requirements, asset: SUI_USDC_MAINNET } },
+          paymentRequirements: { ...requirements, asset: SUI_USDC_MAINNET },
+        });
+      const testnetAssetOnMainnet = await request(server)
+        .post('/verify')
+        .send({
+          paymentPayload: {
+            ...paymentPayload,
+            accepted: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_TESTNET },
+          },
+          paymentRequirements: { ...requirements, network: SUI_MAINNET_CAIP2, asset: SUI_USDC_TESTNET },
+        });
+
+      expect(mainnetAssetOnTestnet.body).toMatchObject({ isValid: false, invalidReason: 'unsupported_asset' });
+      expect(testnetAssetOnMainnet.body).toMatchObject({ isValid: false, invalidReason: 'unsupported_asset' });
+      expect(verify).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a Sui network nobody named', async () => {
+      const response = await request(app()).post('/settle').send(withNetwork('sui:devnet'));
+      expect(response.body).toMatchObject({ success: false, errorReason: 'sui_exact_disabled' });
+      expect(settle).not.toHaveBeenCalled();
     });
   });
 });

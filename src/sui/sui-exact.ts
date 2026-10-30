@@ -13,38 +13,49 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { normalizeStructTag, normalizeSuiAddress } from '@mysten/sui/utils';
 import type { Network } from '@x402/core/types';
-import { config, getSuiNetwork } from '../config';
+import { getSuiGrpcUrl, getSuiNetwork, getSuiNetworks } from '../config';
 import { ExactSuiScheme } from './vendor/exact/facilitator';
 import { getSuiNetworkName } from './vendor/utils';
 
 let scheme: ExactSuiScheme | undefined;
-let schemeNetwork: string | undefined;
-let client: SuiGrpcClient | undefined;
+const clients = new Map<string, SuiGrpcClient>();
 
-/** Build (once) the scheme for the configured network. */
+/**
+ * Build (once) the scheme, with one client per served network.
+ *
+ * Upstream takes a client per CAIP-2 id and picks by the request's network, so a
+ * single scheme instance serves mainnet and testnet at the same time. The map
+ * here is the authority for which endpoints exist: a network we do not serve has
+ * no client, and the routes refuse it before the scheme is reached.
+ */
 export function getExactSuiScheme(): ExactSuiScheme {
-  const network = getSuiNetwork();
-  if (!network) {
-    throw new Error('SUI_NETWORK must be exactly sui:mainnet or sui:testnet when SUI_EXACT_ENABLED=true');
+  if (scheme) return scheme;
+  const networks = getSuiNetworks();
+  if (networks.length === 0) {
+    throw new Error('SUI_NETWORKS must name at least one of sui:mainnet, sui:testnet when SUI_EXACT_ENABLED=true');
   }
-  if (scheme && schemeNetwork === network.caip2) return scheme;
 
-  // `caip2` is always one of the two literal ids in SUI_NETWORKS, so the cast
-  // only restores the template-literal type that config.ts stores as `string`.
-  client = new SuiGrpcClient({
-    network: getSuiNetworkName(network.caip2 as Network),
-    baseUrl: config.suiGrpcUrl,
-  });
+  const byNetwork: Record<string, SuiGrpcClient> = {};
+  for (const network of networks) {
+    // `caip2` is always one of the literal ids in SUI_NETWORKS, so the cast only
+    // restores the template-literal type that config.ts stores as `string`.
+    const client = new SuiGrpcClient({
+      network: getSuiNetworkName(network.caip2 as Network),
+      baseUrl: getSuiGrpcUrl(network.caip2),
+    });
+    byNetwork[network.caip2] = client;
+    clients.set(network.caip2, client);
+  }
 
-  scheme = new ExactSuiScheme({ clients: { [network.caip2]: client } });
-  schemeNetwork = network.caip2;
+  scheme = new ExactSuiScheme({ clients: byNetwork });
   return scheme;
 }
 
-/** The client the scheme submits through, built with the scheme. */
-function suiClient(): SuiGrpcClient {
+/** The client a network submits through, built with the scheme. */
+function suiClient(caip2: string): SuiGrpcClient {
   getExactSuiScheme();
-  if (!client) throw new Error('Sui client is not configured');
+  const client = clients.get(caip2);
+  if (!client) throw new Error(`Sui client is not configured for ${caip2}`);
   return client;
 }
 
@@ -60,9 +71,12 @@ function suiClient(): SuiGrpcClient {
  * Struct tags are compared normalized: a payer may write the short form
  * (`0x2::sui::SUI`) where the node reports the full address, and the two are
  * the same coin.
+ *
+ * @param caip2 - The network the payment names; its asset is the only one served
+ * @param asset - The requirement's asset, as the caller supplied it
  */
-export function isAllowedSuiAsset(asset: unknown): boolean {
-  const network = getSuiNetwork();
+export function isAllowedSuiAsset(caip2: string, asset: unknown): boolean {
+  const network = getSuiNetwork(caip2);
   if (!network || typeof asset !== 'string' || asset.length === 0) return false;
   try {
     return normalizeStructTag(asset) === normalizeStructTag(network.asset);
@@ -112,9 +126,10 @@ export type SuiChainVerdict =
  * while a chain that fails both calls told us nothing.
  *
  * @param transaction - Base64 transaction bytes from the payment payload
+ * @param caip2 - The network the payment names; its client is the one that answers
  * @returns The chain's answer, or null when the bytes do not decode
  */
-export async function suiChainVerdict(transaction: unknown): Promise<SuiChainVerdict | null> {
+export async function suiChainVerdict(transaction: unknown, caip2: string): Promise<SuiChainVerdict | null> {
   if (typeof transaction !== 'string' || transaction.length === 0) return null;
   let digest: string;
   let sender: string;
@@ -126,14 +141,14 @@ export async function suiChainVerdict(transaction: unknown): Promise<SuiChainVer
     return null;
   }
   try {
-    const executed = await suiClient().core.getTransaction({ digest });
+    const executed = await suiClient(caip2).core.getTransaction({ digest });
     return { state: 'executed', digest, sender, succeeded: executed.$kind === 'Transaction' };
   } catch {
     // The lookup failed. Was that because the transaction is not there, or
     // because the chain is not answering? A chain that cannot answer this
     // either has told us nothing.
     try {
-      await suiClient().core.getChainIdentifier();
+      await suiClient(caip2).core.getChainIdentifier();
       return { state: 'absent', digest, sender };
     } catch {
       return { state: 'unknown', digest, sender };

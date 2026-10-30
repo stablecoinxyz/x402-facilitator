@@ -35,8 +35,8 @@
     "smoke:solana:live": "tsx scripts/smoke-solana-settle-live.ts",
     "prove:svm-devnet": "tsx scripts/prove-svm-exact-devnet.ts",
     "prove:svm-mainnet": "tsx scripts/prove-svm-exact-mainnet.ts",
-    "prove:sui-testnet": "SUI_EXACT_ENABLED=true SUI_NETWORK=sui:testnet SUI_GRPC_URL=${SUI_GRPC_URL:-https://fullnode.testnet.sui.io:443} tsx scripts/prove-sui-exact.ts",
-    "prove:sui-mainnet": "SUI_EXACT_ENABLED=true SUI_NETWORK=sui:mainnet SUI_GRPC_URL=${SUI_GRPC_URL:-https://fullnode.mainnet.sui.io:443} tsx scripts/prove-sui-exact.ts"
+    "prove:sui-testnet": "SUI_EXACT_ENABLED=true SUI_NETWORKS=sui:testnet SUI_GRPC_URL_TESTNET=${SUI_GRPC_URL_TESTNET:-https://fullnode.testnet.sui.io:443} tsx scripts/prove-sui-exact.ts",
+    "prove:sui-mainnet": "SUI_EXACT_ENABLED=true SUI_NETWORKS=sui:mainnet SUI_GRPC_URL_MAINNET=${SUI_GRPC_URL_MAINNET:-https://fullnode.mainnet.sui.io:443} tsx scripts/prove-sui-exact.ts"
   },
   "dependencies": {
     "@mysten/sui": "2.38.0",

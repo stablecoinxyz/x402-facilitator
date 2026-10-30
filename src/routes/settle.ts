@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { createWalletClient, createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
-import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, getSuiNetwork, isSuiExactEnabled } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, isSuiExactEnabled, isSuiNetworkServed } from '../config';
 import { settleSolanaPayment } from '../solana/settle';
 import { verifySolanaPayment } from '../solana/verify';
 import { getExactSvmScheme } from '../solana/svm-exact';
@@ -432,8 +432,7 @@ export async function settlePayment(req: Request, res: Response) {
     // success.
     if (network?.startsWith('sui:')) {
       log.debug({ network }, 'Sui settlement');
-      const configuredNetwork = getSuiNetwork();
-      if (!isSuiExactEnabled() || network !== configuredNetwork?.caip2) {
+      if (!isSuiExactEnabled() || !isSuiNetworkServed(network)) {
         settleTotal.inc({ network, result: 'sui_exact_disabled' });
         return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'sui_exact_disabled' });
       }
@@ -447,7 +446,7 @@ export async function settlePayment(req: Request, res: Response) {
         recordDuration(startTime, network);
         return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'invalid_payload' });
       }
-      if (!isAllowedSuiAsset(paymentRequirements?.asset)) {
+      if (!isAllowedSuiAsset(network, paymentRequirements?.asset)) {
         log.warn({ network, asset: paymentRequirements?.asset }, 'Sui asset is not one this facilitator serves');
         settleTotal.inc({ network, result: 'failed' });
         recordDuration(startTime, network);
@@ -483,7 +482,7 @@ export async function settlePayment(req: Request, res: Response) {
         // Without asking the chain first, the replay would be reported as a
         // second success and the resource server would deliver twice for one
         // payment. The chain is the authority; the claim store is a cache.
-        const verdict = await suiChainVerdict(paymentPayload.payload?.transaction);
+        const verdict = await suiChainVerdict(paymentPayload.payload?.transaction, network);
         if (verdict?.state === 'executed' && verdict.succeeded) {
           log.warn({ network, digest: verdict.digest }, 'Sui transaction already executed on chain; refusing to report a second success');
           settleTotal.inc({ network, result: 'duplicate_settlement' });
@@ -517,7 +516,7 @@ export async function settlePayment(req: Request, res: Response) {
         // executed-and-failed is terminal, absent means nothing was broadcast,
         // and an unreadable chain is the one case that stays non-terminal.
         if (!response.success && response.errorReason === 'transaction_failed') {
-          const after = await suiChainVerdict(paymentPayload.payload?.transaction);
+          const after = await suiChainVerdict(paymentPayload.payload?.transaction, network);
           const digest = after?.digest || submittedDigest;
           if (after?.state === 'executed' && after.succeeded) {
             log.warn({ network, digest }, 'Sui reported failure for a transaction the chain executed successfully');

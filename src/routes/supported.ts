@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network, getSuiNetwork, isSuiExactEnabled } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network, getSuiNetworks, isSuiExactEnabled } from '../config';
 
 /**
  * GET /supported - x402 V2 Capability Discovery
@@ -68,10 +68,12 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // Sui Exact is opt-in on an explicit CAIP-2 network. No `extra`: phase 1 runs
   // no gas sponsor (Circle USDC is on Sui's gasless allowlist), and `extra.nonce`
   // is issued by the resource server, never advertised by the facilitator. No v1
-  // kind — the Sui scheme exists only in the v2 spec.
-  const suiNetwork = getSuiNetwork();
-  if (isSuiExactEnabled() && suiNetwork) {
-    addKind(suiNetwork.caip2, {}, false);
+  // kind — the Sui scheme exists only in the v2 spec. One kind per served
+  // network, so a client can see mainnet and testnet at once.
+  if (isSuiExactEnabled()) {
+    for (const suiNetwork of getSuiNetworks()) {
+      addKind(suiNetwork.caip2, {}, false);
+    }
   }
 
   // SupportedResponse advertises extension identifiers. The extension's schema

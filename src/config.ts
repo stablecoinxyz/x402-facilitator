@@ -51,10 +51,19 @@ export const config = {
   solanaSvmNetwork: process.env.SOLANA_SVM_NETWORK || '',
 
   // Sui Configuration. Exact is an explicit opt-in, same shape as SVM: keys and
-  // a URL alone never expose a settlement capability.
+  // a URL alone never expose a settlement capability. `SUI_NETWORKS` is a
+  // comma-separated CAIP-2 list, so mainnet and testnet can be served at once;
+  // each network needs its own gRPC endpoint, since a mainnet node cannot answer
+  // for testnet.
   suiExactEnabled: process.env.SUI_EXACT_ENABLED === 'true',
-  suiNetwork: process.env.SUI_NETWORK || '',
-  suiGrpcUrl: process.env.SUI_GRPC_URL || '',
+  suiNetworks: (process.env.SUI_NETWORKS || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0),
+  suiGrpcUrls: {
+    'sui:mainnet': process.env.SUI_GRPC_URL_MAINNET || '',
+    'sui:testnet': process.env.SUI_GRPC_URL_TESTNET || '',
+  } as Record<string, string>,
   sbcTokenAddress: process.env.SBC_TOKEN_ADDRESS || 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
   sbcDecimals: 9,
 };
@@ -90,25 +99,65 @@ export const SUI_USDC_TESTNET = '0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428c
 /**
  * Sui networks this facilitator will serve, keyed by CAIP-2 id.
  *
- * `SUI_NETWORK` is matched verbatim against these keys — CAIP-2 only, no
- * friendly-name aliases (repo rule). A typo therefore fails at boot instead of
- * silently matching nothing, and there is no second naming convention to drift.
+ * `SUI_NETWORKS` entries are matched verbatim against these keys — CAIP-2 only,
+ * no friendly-name aliases (repo rule). A typo therefore fails at boot instead
+ * of silently matching nothing, and there is no second naming convention to
+ * drift.
  */
 export const SUI_NETWORKS: Record<string, { caip2: string; asset: string; decimals: number }> = {
   [SUI_MAINNET_CAIP2]: { caip2: SUI_MAINNET_CAIP2, asset: SUI_USDC_MAINNET, decimals: 6 },
   [SUI_TESTNET_CAIP2]: { caip2: SUI_TESTNET_CAIP2, asset: SUI_USDC_TESTNET, decimals: 6 },
 };
 
-/** The configured Sui network, or null when the env value is not one of ours. */
-export function getSuiNetwork() {
-  return Object.prototype.hasOwnProperty.call(SUI_NETWORKS, config.suiNetwork)
-    ? SUI_NETWORKS[config.suiNetwork]
+/**
+ * The Sui networks this process serves, in declaration order and deduplicated.
+ *
+ * Unknown ids are dropped here and rejected at boot (§ the startup checks at the
+ * end of this file), so a request can never reach a network we did not name.
+ */
+export function getSuiNetworks(): Array<{ caip2: string; asset: string; decimals: number }> {
+  const seen = new Set<string>();
+  const networks = [];
+  for (const id of config.suiNetworks) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (Object.prototype.hasOwnProperty.call(SUI_NETWORKS, id)) networks.push(SUI_NETWORKS[id]);
+  }
+  return networks;
+}
+
+/** One configured Sui network by CAIP-2 id, or null when it is not served. */
+export function getSuiNetwork(caip2: string) {
+  return Object.prototype.hasOwnProperty.call(SUI_NETWORKS, caip2) &&
+    config.suiNetworks.includes(caip2)
+    ? SUI_NETWORKS[caip2]
     : null;
 }
 
-/** True only when an operator deliberately selects a supported Sui network. */
+/** True when this process serves the given Sui network. */
+export function isSuiNetworkServed(caip2: string | undefined): boolean {
+  return typeof caip2 === 'string' && getSuiNetwork(caip2) !== null;
+}
+
+/** The gRPC endpoint for a Sui network, or '' when the operator set none. */
+export function getSuiGrpcUrl(caip2: string): string {
+  return config.suiGrpcUrls[caip2] || '';
+}
+
+/**
+ * The env var that carries a Sui network's gRPC endpoint.
+ *
+ * `sui:mainnet` → `SUI_GRPC_URL_MAINNET`. One var per network because a node for
+ * one chain cannot answer for another, so a shared URL would be wrong for half
+ * the served networks.
+ */
+export function suiGrpcEnvName(caip2: string): string {
+  return `SUI_GRPC_URL_${caip2.replace(/^sui:/, '').toUpperCase()}`;
+}
+
+/** True only when an operator deliberately selects at least one supported Sui network. */
 export function isSuiExactEnabled(): boolean {
-  return config.suiExactEnabled && Boolean(getSuiNetwork());
+  return config.suiExactEnabled && getSuiNetworks().length > 0;
 }
 
 /**
@@ -194,14 +243,22 @@ if (config.solanaSvmExactEnabled && !getSolanaSvmNetwork()) {
   throw new Error('SOLANA_SVM_NETWORK must explicitly be solana, solana-devnet, or solana-testnet when SOLANA_SVM_EXACT_ENABLED=true');
 }
 
-// Validate Sui config (optional — only if Sui is being used). Both failures are
-// startup errors: an enabled Sui network without a gRPC endpoint cannot verify
-// or settle anything, and silently serving nothing is worse than refusing to boot.
-if (config.suiExactEnabled && !getSuiNetwork()) {
-  throw new Error('SUI_NETWORK must be exactly sui:mainnet or sui:testnet when SUI_EXACT_ENABLED=true');
+// Validate Sui config (optional — only if Sui is being used). Every failure is a
+// startup error: an enabled Sui network without a gRPC endpoint cannot verify or
+// settle anything, and silently serving nothing is worse than refusing to boot.
+// Ids are checked first so a typo is named rather than reported as an empty list.
+for (const id of config.suiNetworks) {
+  if (!Object.prototype.hasOwnProperty.call(SUI_NETWORKS, id)) {
+    throw new Error(`SUI_NETWORKS contains "${id}", which is not sui:mainnet or sui:testnet`);
+  }
 }
-if (config.suiExactEnabled && !config.suiGrpcUrl) {
-  throw new Error('SUI_GRPC_URL is required when SUI_EXACT_ENABLED=true');
+if (config.suiExactEnabled && getSuiNetworks().length === 0) {
+  throw new Error('SUI_NETWORKS must name at least one of sui:mainnet, sui:testnet when SUI_EXACT_ENABLED=true');
+}
+for (const id of config.suiNetworks) {
+  if (!getSuiGrpcUrl(id)) {
+    throw new Error(`${SUI_NETWORKS[id].caip2} is enabled but its gRPC endpoint is unset (set ${suiGrpcEnvName(id)})`);
+  }
 }
 
 // Startup log is emitted by server.ts with structured logger

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { createPublicClient, http, verifyTypedData } from 'viem';
 import type { Logger } from 'pino';
-import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, getSuiNetwork, isSuiExactEnabled } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, isSuiExactEnabled, isSuiNetworkServed } from '../config';
 import { verifySolanaPayment } from '../solana/verify';
 import { getExactSvmScheme } from '../solana/svm-exact';
 import { getExactSuiScheme, isAllowedSuiAsset, suiAcceptanceBindsRequirements, suiMessageNeedsRedaction } from '../sui/sui-exact';
@@ -269,15 +269,14 @@ export async function verifyPayment(req: Request, res: Response) {
 
     // Route by network — Sui uses CAIP-2 "sui:..." prefix.
     //
-    // Two checks precede the scheme: our opt-in gate (an enabled config serves
-    // exactly one network), and our asset policy. The asset check is ours, not
-    // the spec's: verification is effects-only, so the scheme would happily
-    // approve a transfer of any coin type. Without it we would settle payments
-    // denominated in arbitrary Sui tokens.
+    // Two checks precede the scheme: our opt-in gate (only the networks named in
+    // SUI_NETWORKS are served, each with its own asset), and our asset policy.
+    // The asset check is ours, not the spec's: verification is effects-only, so
+    // the scheme would happily approve a transfer of any coin type. Without it we
+    // would settle payments denominated in arbitrary Sui tokens.
     if (network?.startsWith('sui:')) {
       log.debug({ network }, 'Sui payment detected');
-      const configuredNetwork = getSuiNetwork();
-      if (!isSuiExactEnabled() || network !== configuredNetwork?.caip2) {
+      if (!isSuiExactEnabled() || !isSuiNetworkServed(network)) {
         verifyTotal.inc({ network, result: 'invalid' });
         return res.json({ isValid: false, payer: 'unknown', invalidReason: 'sui_exact_disabled' });
       }
@@ -291,7 +290,7 @@ export async function verifyPayment(req: Request, res: Response) {
         recordDuration(startTime, network);
         return res.json({ isValid: false, payer: 'unknown', invalidReason: 'invalid_payload' });
       }
-      if (!isAllowedSuiAsset(paymentRequirements?.asset)) {
+      if (!isAllowedSuiAsset(network, paymentRequirements?.asset)) {
         log.warn({ network, asset: paymentRequirements?.asset }, 'Sui asset is not one this facilitator serves');
         verifyTotal.inc({ network, result: 'invalid' });
         recordDuration(startTime, network);

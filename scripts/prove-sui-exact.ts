@@ -18,8 +18,9 @@
  * The proof is self-limiting: it spends one small payment.
  *
  * Requirements:
- *   SUI_EXACT_ENABLED=true  SUI_NETWORK=<sui:testnet|sui:mainnet>  SUI_GRPC_URL=<gRPC endpoint>
+ *   SUI_EXACT_ENABLED=true  SUI_NETWORKS=<caip2>[,<caip2>]  SUI_GRPC_URL_<NET>=<gRPC endpoint>
  *   SUI_PROVE_PRIVATE_KEY=<hex Ed25519 secret key>
+ *   SUI_PROVE_NETWORK=<caip2>                 (only when several networks are served)
  *   SUI_PROVE_PAY_TO=<Sui address>            (default: the spike recipient below)
  *   SUI_PROVE_AMOUNT=<atomic units>           (default: 50000 = 0.05 USDC)
  *
@@ -31,7 +32,7 @@ import request from 'supertest';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
 import { SuiGrpcClient } from '@mysten/sui/grpc';
-import { config, getSuiNetwork, SUI_TESTNET_CAIP2 } from '../src/config';
+import { config, getSuiNetworks, getSuiGrpcUrl, SUI_TESTNET_CAIP2 } from '../src/config';
 import { verifyPayment } from '../src/routes/verify';
 import { settlePayment } from '../src/routes/settle';
 
@@ -61,12 +62,27 @@ function requireEnv(): { keypair: Ed25519Keypair; network: { caip2: string; asse
   if (config.suiExactEnabled !== true) {
     fail('SUI_EXACT_ENABLED must be true. Run through `npm run prove:sui-testnet` or `npm run prove:sui-mainnet`.');
   }
-  if (!config.suiGrpcUrl) {
-    fail('SUI_GRPC_URL must be set to the gRPC fullnode for the configured network.');
+  const served = getSuiNetworks();
+  if (served.length === 0) {
+    fail('SUI_NETWORKS must name at least one of sui:mainnet, sui:testnet (CAIP-2, no aliases).');
   }
-  const network = getSuiNetwork();
+  // With one network served there is nothing to choose. With several, the
+  // operator names the one to prove rather than getting whichever came first.
+  const wanted = process.env.SUI_PROVE_NETWORK;
+  const network = wanted
+    ? served.find((candidate) => candidate.caip2 === wanted)
+    : served.length === 1
+      ? served[0]
+      : undefined;
   if (!network) {
-    fail('SUI_NETWORK must be exactly sui:mainnet or sui:testnet (CAIP-2, no aliases).');
+    fail(
+      wanted
+        ? `SUI_PROVE_NETWORK=${wanted} is not served here; served: ${served.map((n) => n.caip2).join(', ')}.`
+        : `several Sui networks are served; set SUI_PROVE_NETWORK to one of ${served.map((n) => n.caip2).join(', ')}.`,
+    );
+  }
+  if (!getSuiGrpcUrl(network.caip2)) {
+    fail(`the gRPC endpoint for ${network.caip2} is unset (set SUI_GRPC_URL_${network.caip2.replace(/^sui:/, '').toUpperCase()}).`);
   }
   const hex = process.env.SUI_PROVE_PRIVATE_KEY;
   if (!hex) {
@@ -78,7 +94,7 @@ function requireEnv(): { keypair: Ed25519Keypair; network: { caip2: string; asse
 async function main() {
   const { keypair, network } = requireEnv();
   const payer = keypair.toSuiAddress();
-  const client = new SuiGrpcClient({ network: network.caip2 === SUI_TESTNET_CAIP2 ? 'testnet' : 'mainnet', baseUrl: config.suiGrpcUrl });
+  const client = new SuiGrpcClient({ network: network.caip2 === SUI_TESTNET_CAIP2 ? 'testnet' : 'mainnet', baseUrl: getSuiGrpcUrl(network.caip2) });
 
   const readBalance = async (owner: string): Promise<bigint> => {
     const { balance } = await client.core.getBalance({ owner, coinType: network.asset });
