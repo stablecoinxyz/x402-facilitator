@@ -367,6 +367,22 @@ describe('POST /verify - x402 V2 Spec Compliance', () => {
       expect(response.body.isValid).toBe(false);
       expect(response.body.invalidReason).toBe('invalid_network');
     });
+
+    it('should refuse inherited object keys as network names instead of throwing', async () => {
+      // `__proto__` and `constructor` are not aliases. A plain index lookup
+      // returned an object here, so the route threw and answered 500.
+      for (const network of ['__proto__', 'constructor', 'toString']) {
+        const paymentPayload = createBasePayment();
+        paymentPayload.accepted.network = network;
+        const paymentRequirements = createPaymentRequirements('eip155:8453');
+
+        const response = await sendVerify(app, paymentPayload, paymentRequirements);
+
+        expect(response.status).toBe(200);
+        expect(response.body.isValid).toBe(false);
+        expect(response.body.invalidReason).toBe('invalid_network');
+      }
+    });
   });
 
   describe('Error Handling', () => {

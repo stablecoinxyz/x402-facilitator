@@ -110,7 +110,8 @@ export const SUI_NETWORKS: Record<string, { caip2: string; asset: string; decima
 };
 
 /**
- * The Sui networks this process serves, in declaration order and deduplicated.
+ * The Sui networks this process serves, deduplicated, in the order `SUI_NETWORKS`
+ * names them (so `/supported` order follows the operator's list).
  *
  * Unknown ids are dropped here and rejected at boot (§ the startup checks at the
  * end of this file), so a request can never reach a network we did not name.
@@ -141,7 +142,12 @@ export function isSuiNetworkServed(caip2: string | undefined): boolean {
 
 /** The gRPC endpoint for a Sui network, or '' when the operator set none. */
 export function getSuiGrpcUrl(caip2: string): string {
-  return config.suiGrpcUrls[caip2] || '';
+  // Own-property semantics so a key like `__proto__` cannot answer with an
+  // inherited object where a URL is promised.
+  const url = Object.prototype.hasOwnProperty.call(config.suiGrpcUrls, caip2)
+    ? config.suiGrpcUrls[caip2]
+    : '';
+  return typeof url === 'string' ? url : '';
 }
 
 /**
@@ -197,7 +203,15 @@ export function toCaip2Network(network: unknown): string {
   if (typeof network !== 'string' || network === '') return 'unknown';
   if (network.includes(':')) return network;
   const key = network.toLowerCase();
-  return V1_NETWORK_TO_CAIP2[key] || V1_NETWORK_ALIASES[key] || network;
+  // Own-property semantics: `__proto__` / `constructor` are not aliases, and a
+  // plain index would hand back an object where a string is promised — the
+  // caller then throws on `.startsWith` and answers 500 to a malformed request.
+  const hit = Object.prototype.hasOwnProperty.call(V1_NETWORK_TO_CAIP2, key)
+    ? V1_NETWORK_TO_CAIP2[key]
+    : Object.prototype.hasOwnProperty.call(V1_NETWORK_ALIASES, key)
+      ? V1_NETWORK_ALIASES[key]
+      : undefined;
+  return typeof hit === 'string' ? hit : network;
 }
 
 /**
