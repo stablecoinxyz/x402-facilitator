@@ -13,8 +13,7 @@
 import type { Logger } from 'pino';
 import logger from '../lib/logger';
 import { settleWithCasperFacilitator } from './client';
-import { casperAsset } from './verify';
-import { parseMotes, resolveCasperNetwork } from './networks';
+import { casperAsset, checkCasperPayment } from './verify';
 
 interface CasperPaymentPayload {
   from: string;   // account-hash-... or hex public key (payer)
@@ -43,16 +42,14 @@ export async function settleCasperPayment(
   const from = paymentPayload?.from || 'unknown';
 
   try {
-    const networkConfig = resolveCasperNetwork(network);
-    if (!networkConfig) {
-      log.warn({ network }, 'Unknown Casper network');
-      return { success: false, payer: from, transaction: '', network, errorReason: 'invalid_network' };
+    // /settle validates on its own: recipient, amount and validity window are
+    // re-checked here rather than trusting that /verify ran.
+    const invalidReason = checkCasperPayment(paymentPayload, paymentRequirements, network, log);
+    if (invalidReason) {
+      return { success: false, payer: from, transaction: '', network, errorReason: invalidReason };
     }
 
-    // Re-assert exact mote math before submitting a deploy.
-    const motes = parseMotes(paymentPayload.amount);
-
-    log.debug({ from, to: paymentPayload.to, motes: motes.toString(), network: networkConfig.label }, 'Casper settlement');
+    log.debug({ from, to: paymentPayload.to, motes: paymentPayload.amount, network }, 'Casper settlement');
 
     const result = await settleWithCasperFacilitator(
       { x402Version: 2, accepted: { scheme: 'exact', network }, payload: paymentPayload, extensions: {} },

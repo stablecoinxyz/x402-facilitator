@@ -295,6 +295,29 @@ describe('verifyCasperPayment', () => {
     expect(result.invalidReason).toBe('invalid_exact_evm_payload_authorization_valid_before');
   });
 
+  it.each([
+    ['missing', undefined],
+    ['non-numeric string', 'tomorrow'],
+    ['null', null],
+    ['fractional', 1.5],
+    ['zero', 0],
+  ])('rejects a %s deadline instead of treating it as non-expiring', async (_label, deadline) => {
+    const fetchMock = mockFetch({ isValid: true, payer: PAYER, invalidReason: null });
+    const payload: any = basePayload({ deadline });
+    if (deadline === undefined) delete payload.deadline;
+    const result = await verifyCasperPayment(payload, baseRequirements(), CASPER_MAINNET_CAIP2);
+    expect(result.isValid).toBe(false);
+    expect(result.invalidReason).toBe('invalid_exact_evm_payload_authorization_valid_before');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a future deadline sent as a digit string', async () => {
+    mockFetch({ isValid: true, payer: PAYER, invalidReason: null });
+    const deadline = String(Math.floor(Date.now() / 1000) + 600);
+    const result = await verifyCasperPayment(basePayload({ deadline }), baseRequirements(), CASPER_MAINNET_CAIP2);
+    expect(result.isValid).toBe(true);
+  });
+
   it('accepts the v1 maxAmountRequired field', async () => {
     mockFetch({ isValid: true, payer: PAYER, invalidReason: null });
     const result = await verifyCasperPayment(
@@ -361,8 +384,24 @@ describe('settleCasperPayment', () => {
     const result = await settleCasperPayment(basePayload({ amount: '1.5' }), baseRequirements(), CASPER_MAINNET_CAIP2);
 
     expect(result.success).toBe(false);
-    expect(result.errorReason).toMatch(/whole number of motes/);
+    expect(result.errorReason).toBe('invalid_exact_evm_payload_authorization_value_mismatch');
     expect(result.transaction).toBe('');
+  });
+
+  it.each([
+    ['recipient mismatch', {}, { payTo: 'account-hash-' + '9'.repeat(64) }, 'invalid_exact_evm_payload_recipient_mismatch'],
+    ['underpayment', { amount: '49999999' }, {}, 'invalid_exact_evm_payload_authorization_value_mismatch'],
+    ['expired deadline', { deadline: Math.floor(Date.now() / 1000) - 60 }, {}, 'invalid_exact_evm_payload_authorization_valid_before'],
+    ['missing deadline', { deadline: undefined }, {}, 'invalid_exact_evm_payload_authorization_valid_before'],
+    ['non-numeric deadline', { deadline: 'never' }, {}, 'invalid_exact_evm_payload_authorization_valid_before'],
+    ['invalid payer', { from: '0xdeadbeef' }, {}, 'invalid_exact_evm_payload_signature'],
+  ])('validates on its own and never forwards on %s', async (_label, payloadOverrides, reqOverrides, reason) => {
+    const fetchMock = mockFetch({ success: true, payer: PAYER, transaction: 'd'.repeat(64), network: CASPER_MAINNET_CAIP2 });
+    const payload: any = basePayload(payloadOverrides);
+    if ('deadline' in payloadOverrides && payloadOverrides.deadline === undefined) delete payload.deadline;
+    const result = await settleCasperPayment(payload, baseRequirements(reqOverrides), CASPER_MAINNET_CAIP2);
+    expect(result).toEqual({ success: false, payer: payload.from, transaction: '', network: CASPER_MAINNET_CAIP2, errorReason: reason });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('propagates a failed settlement from the Casper facilitator', async () => {
