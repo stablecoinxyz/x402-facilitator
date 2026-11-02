@@ -6,6 +6,7 @@ import { settlePayment } from '../routes/settle';
 import { getSupportedNetworks } from '../routes/supported';
 import { getExactSuiScheme, suiChainVerdict } from '../sui/sui-exact';
 import { buildTestTransaction, digestOf } from './sui-helpers';
+import { MemorySuiSettlementLedger, setSuiSettlementLedgerForTests } from '../sui/settlement-ledger';
 
 // The real asset policy and envelope binding are kept: they are our own guards,
 // and mocking them would let the test agree with a bug in them. Only the pieces
@@ -77,6 +78,7 @@ describe('Sui Exact routes', () => {
     // Default: the chain has not seen the transaction, so settlement proceeds.
     verdict.mockReset().mockResolvedValue({ state: 'unknown', digest: DIGEST, sender: 'payer' });
     scheme.mockReset().mockReturnValue({ verify, settle });
+    setSuiSettlementLedgerForTests(new MemorySuiSettlementLedger());
     config.suiExactEnabled = true;
     config.suiNetworks = [SUI_TESTNET_CAIP2];
     config.suiGrpcUrls = { ...config.suiGrpcUrls, [SUI_TESTNET_CAIP2]: 'https://fullnode.testnet.sui.io:443' };
@@ -193,6 +195,8 @@ describe('Sui Exact routes', () => {
       // through, that reads as "nothing happened" and invites a second payment.
       const transaction = await buildTestTransaction();
       const digest = await digestOf(transaction);
+      // The verdict's digest is computed from the same bytes, so it matches.
+      verdict.mockReset().mockResolvedValue({ state: 'unknown', digest, sender: 'payer' });
       settle.mockResolvedValueOnce({
         success: false,
         payer: 'payer',
@@ -228,21 +232,14 @@ describe('Sui Exact routes', () => {
       expect(response.body).toMatchObject({ success: false, errorReason: 'duplicate_settlement', transaction: DIGEST });
     });
 
-    it('omits the digest only when neither the bytes nor the chain can supply it', async () => {
-      // Undecodable bytes and an unreadable chain: there is no hash to report,
-      // and inventing one would be worse than the gap.
-      settle.mockResolvedValueOnce({
-        success: false,
-        payer: 'payer',
-        transaction: '',
-        network: SUI_TESTNET_CAIP2,
-        errorReason: 'duplicate_settlement',
-      });
+    it('refuses undecodable bytes before the scheme, since there is no digest to record', async () => {
+      // No digest means no ledger key, and nothing may be submitted without one.
       verdict.mockReset().mockResolvedValue(null);
 
       const response = await request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
 
-      expect(response.body).toMatchObject({ success: false, errorReason: 'duplicate_settlement', transaction: '' });
+      expect(response.body).toMatchObject({ success: false, errorReason: 'invalid_exact_sui_payload_transaction_could_not_be_decoded', transaction: '' });
+      expect(settle).not.toHaveBeenCalled();
     });
 
     it('refuses to settle when this instance may not move money', async () => {
@@ -393,6 +390,125 @@ describe('Sui Exact routes', () => {
       });
     });
 
+    describe('durable settlement ledger', () => {
+      const KEY = { network: SUI_TESTNET_CAIP2, digest: DIGEST };
+      const lost = {
+        success: false,
+        payer: 'payer',
+        transaction: DIGEST,
+        network: SUI_TESTNET_CAIP2,
+        errorReason: 'transaction_failed',
+        errorMessage: 'socket hang up',
+      };
+      const send = () => request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
+
+      it('refuses real settlement with no ledger configured, before the scheme', async () => {
+        setSuiSettlementLedgerForTests(null);
+        const response = await send();
+        expect(response.body).toMatchObject({ success: false, errorReason: 'sui_durability_unavailable', transaction: '' });
+        expect(settle).not.toHaveBeenCalled();
+      });
+
+      it('refuses when the ledger cannot be reached, and never leaks its error text', async () => {
+        const broken = new MemorySuiSettlementLedger();
+        broken.claim = async () => {
+          throw Object.assign(new Error('connect ECONNREFUSED redis://default:hunter2@redis.internal:6379'), { code: 'ECONNREFUSED' });
+        };
+        setSuiSettlementLedgerForTests(broken);
+        const response = await send();
+        expect(response.body).toMatchObject({ success: false, errorReason: 'sui_durability_unavailable' });
+        expect(JSON.stringify(response.body)).not.toContain('hunter2');
+        expect(settle).not.toHaveBeenCalled();
+      });
+
+      it('answers pending, without submitting, while another request holds the digest', async () => {
+        const ledger = new MemorySuiSettlementLedger();
+        await ledger.claim(KEY, 'other-request');
+        setSuiSettlementLedgerForTests(ledger);
+        const response = await send();
+        expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: DIGEST });
+        expect(settle).not.toHaveBeenCalled();
+      });
+
+      it('answers duplicate_settlement, without submitting, once the digest is recorded executed', async () => {
+        const ledger = new MemorySuiSettlementLedger();
+        await ledger.claim(KEY, 'other-request');
+        await ledger.mark(KEY, 'executed');
+        setSuiSettlementLedgerForTests(ledger);
+        const response = await send();
+        expect(response.body).toMatchObject({ success: false, errorReason: 'duplicate_settlement', transaction: DIGEST });
+        expect(settle).not.toHaveBeenCalled();
+      });
+
+      it('keeps the record after a broadcast with an unknown outcome, so a second request cannot resubmit', async () => {
+        // The race this ledger exists for: the scheme releases its own claim after
+        // any failure, a second request claims and resubmits, and the fullnode
+        // answers the resubmit as a fresh success — two successes, one payment.
+        const ledger = new MemorySuiSettlementLedger();
+        setSuiSettlementLedgerForTests(ledger);
+        settle.mockResolvedValueOnce(lost);
+        verdict.mockResolvedValue({ state: 'absent', digest: DIGEST, sender: 'payer' });
+
+        const first = await send();
+        expect(first.body).toMatchObject({ errorReason: 'settlement_pending', transaction: DIGEST });
+        expect(await ledger.get(KEY)).toMatchObject({ state: 'broadcast' });
+
+        const second = await send();
+        expect(second.body).toMatchObject({ errorReason: 'settlement_pending', transaction: DIGEST });
+        expect(settle).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases the record when nothing was broadcast, so the payer can retry the same bytes', async () => {
+        const ledger = new MemorySuiSettlementLedger();
+        setSuiSettlementLedgerForTests(ledger);
+        settle.mockResolvedValueOnce({ ...lost, transaction: '', errorMessage: 'epoch read failed' });
+        verdict.mockResolvedValue({ state: 'absent', digest: DIGEST, sender: 'payer' });
+
+        await send();
+        expect(await ledger.get(KEY)).toBeNull();
+
+        const retry = await send();
+        expect(retry.body).toMatchObject({ success: true, transaction: DIGEST });
+        expect(settle).toHaveBeenCalledTimes(2);
+      });
+
+      it('releases the record when the chain confirms the transaction failed', async () => {
+        const ledger = new MemorySuiSettlementLedger();
+        setSuiSettlementLedgerForTests(ledger);
+        settle.mockResolvedValueOnce({ ...lost, errorMessage: 'InsufficientCoinBalance' });
+        verdict
+          .mockResolvedValueOnce({ state: 'unknown', digest: DIGEST, sender: 'payer' })
+          .mockResolvedValueOnce({ state: 'executed', digest: DIGEST, sender: 'payer', succeeded: false, balanceChanges: [] });
+        const response = await send();
+        expect(response.body).toMatchObject({ success: false, errorReason: 'transaction_failed', transaction: DIGEST });
+        expect(await ledger.get(KEY)).toBeNull();
+      });
+
+      it('records a success as executed, so a repeat is a duplicate even before the chain shows it', async () => {
+        const ledger = new MemorySuiSettlementLedger();
+        setSuiSettlementLedgerForTests(ledger);
+        await send();
+        expect(await ledger.get(KEY)).toMatchObject({ state: 'executed' });
+        const repeat = await send();
+        expect(repeat.body).toMatchObject({ success: false, errorReason: 'duplicate_settlement', transaction: DIGEST });
+        expect(settle).toHaveBeenCalledTimes(1);
+      });
+
+      it('still answers with the digest when a ledger write fails after the broadcast', async () => {
+        // A throw here would reach the catch-all, which answers transaction: "" —
+        // "nothing happened" — for a payment that may have moved.
+        const ledger = new MemorySuiSettlementLedger();
+        ledger.mark = async () => {
+          throw Object.assign(new Error('write failed'), { code: 'ECONNRESET' });
+        };
+        setSuiSettlementLedgerForTests(ledger);
+        settle.mockResolvedValueOnce(lost);
+        verdict.mockResolvedValue({ state: 'absent', digest: DIGEST, sender: 'payer' });
+        const response = await send();
+        expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: DIGEST });
+      });
+    });
+
     describe('replay across a restart', () => {
       it('refuses to report a second success for a digest the chain already executed', async () => {
         // The scheme's only replay guard is an in-process claim store, which
@@ -477,24 +593,69 @@ describe('Sui Exact routes', () => {
         expect(response.body.errorMessage).toContain('reconcile the digest');
       });
 
-      it('reports duplicate_settlement when the chain holds a success the scheme called failed', async () => {
-        // The scheme lost the receipt after the transaction executed. Answering
-        // transaction_failed here would have the payer sign a second payment for
-        // money that already moved.
-        settle.mockResolvedValueOnce({
-          success: false,
-          payer: 'payer',
-          transaction: DIGEST,
-          network: SUI_TESTNET_CAIP2,
-          errorReason: 'transaction_failed',
-          errorMessage: 'socket hang up',
-        });
+      const credited = (amount: string, address = PAY_TO) => [
+        { address, coinType: SUI_USDC_TESTNET, amount },
+        { address: 'payer', coinType: SUI_USDC_TESTNET, amount: `-${amount}` },
+      ];
+      const lostReceipt = {
+        success: false,
+        payer: 'payer',
+        // The scheme's post-broadcast failures carry the digest.
+        transaction: DIGEST,
+        network: SUI_TESTNET_CAIP2,
+        errorReason: 'transaction_failed',
+        errorMessage: 'socket hang up',
+      };
+
+      it('reports success when THIS request broadcast and the chain shows the exact payment executed', async () => {
+        // The scheme lost the receipt after its own broadcast. The payer's one
+        // payment landed; duplicate_settlement here makes the seller refuse them.
+        settle.mockResolvedValueOnce(lostReceipt);
         verdict
           .mockResolvedValueOnce({ state: 'unknown', digest: DIGEST, sender: 'payer' })
-          .mockResolvedValueOnce({ state: 'executed', digest: DIGEST, sender: 'payer', succeeded: true });
+          .mockResolvedValueOnce({ state: 'executed', digest: DIGEST, sender: 'payer', succeeded: true, balanceChanges: credited('50000') });
+        const response = await request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
+        expect(response.body).toEqual({ success: true, payer: 'payer', transaction: DIGEST, network: SUI_TESTNET_CAIP2 });
+      });
+
+      it('reports duplicate_settlement when the chain success was NOT broadcast by this request', async () => {
+        // Pre-broadcast failure (the scheme's failure() helper: empty transaction),
+        // yet the chain holds the transaction executed: someone else sent the bytes.
+        settle.mockResolvedValueOnce({ ...lostReceipt, transaction: '', errorMessage: 'epoch read failed' });
+        verdict
+          .mockResolvedValueOnce({ state: 'unknown', digest: DIGEST, sender: 'payer' })
+          .mockResolvedValueOnce({ state: 'executed', digest: DIGEST, sender: 'payer', succeeded: true, balanceChanges: credited('50000') });
         const response = await request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
         expect(response.body).toMatchObject({ success: false, errorReason: 'duplicate_settlement', transaction: DIGEST });
         expect(response.body.errorMessage).toContain('do not re-authorize');
+      });
+
+      it('never reports success when the executed effects do not pay exactly the amount', async () => {
+        settle.mockResolvedValueOnce(lostReceipt);
+        verdict
+          .mockResolvedValueOnce({ state: 'unknown', digest: DIGEST, sender: 'payer' })
+          .mockResolvedValueOnce({ state: 'executed', digest: DIGEST, sender: 'payer', succeeded: true, balanceChanges: credited('49999') });
+        const response = await request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
+        expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_effects_mismatch', transaction: DIGEST });
+        expect(response.body.errorMessage).toContain('expected exactly 50000');
+      });
+
+      it('never reports success when the credit went to another address', async () => {
+        settle.mockResolvedValueOnce(lostReceipt);
+        verdict
+          .mockResolvedValueOnce({ state: 'unknown', digest: DIGEST, sender: 'payer' })
+          .mockResolvedValueOnce({ state: 'executed', digest: DIGEST, sender: 'payer', succeeded: true, balanceChanges: credited('50000', OTHER_PAY_TO) });
+        const response = await request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
+        expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_effects_mismatch' });
+      });
+
+      it('answers settlement_pending when the executed balance changes cannot be read', async () => {
+        settle.mockResolvedValueOnce(lostReceipt);
+        verdict
+          .mockResolvedValueOnce({ state: 'unknown', digest: DIGEST, sender: 'payer' })
+          .mockResolvedValueOnce({ state: 'executed', digest: DIGEST, sender: 'payer', succeeded: true, balanceChanges: null });
+        const response = await request(app()).post('/settle').send({ paymentPayload, paymentRequirements: requirements });
+        expect(response.body).toMatchObject({ success: false, errorReason: 'settlement_pending', transaction: DIGEST });
       });
 
       it('leaves our own diagnostic messages intact', async () => {

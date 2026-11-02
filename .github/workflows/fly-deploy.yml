@@ -10,6 +10,20 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
+    # The Sui settlement ledger's tests run against a real Redis; without it
+    # they fail in CI rather than skip.
+    services:
+      redis:
+        image: redis:7.4.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      REDIS_TEST_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

@@ -71,6 +71,41 @@ MUTATIONS = [
         "    if (to.toLowerCase() !== paymentRequirements.payTo.toLowerCase()) {",
         ["src/__tests__/solana-settle-auth.spec.ts", "-t", "letter case"],
     ),
+    (
+        "Sui ledger record released after a broadcast whose outcome is unknown",
+        "src/routes/settle.ts",
+        "if (broadcastByUs) await ledgerWrite(log, () => ledger.mark(key, 'broadcast'));",
+        "if (broadcastByUs) await ledgerWrite(log, () => ledger.release(key));",
+        ["src/__tests__/sui-exact-route.spec.ts", "-t", "cannot resubmit"],
+    ),
+    (
+        "Sui treats every chain success as this request's own broadcast",
+        "src/routes/settle.ts",
+        "const broadcastByUs = settled.transaction !== '';",
+        "const broadcastByUs = true;",
+        ["src/__tests__/sui-exact-route.spec.ts", "-t", "NOT broadcast by this request"],
+    ),
+    (
+        "Sui treats no chain success as this request's own broadcast",
+        "src/routes/settle.ts",
+        "const broadcastByUs = settled.transaction !== '';",
+        "const broadcastByUs = false;",
+        ["src/__tests__/sui-exact-route.spec.ts", "-t", "THIS request broadcast"],
+    ),
+    (
+        "Sui reports a lost-receipt success without checking the executed effects",
+        "src/routes/settle.ts",
+        "const effects = suiEffectsVerdict(after.balanceChanges, paymentRequirements);",
+        "const effects = { kind: 'match' } as ReturnType<typeof suiEffectsVerdict>;",
+        ["src/__tests__/sui-exact-route.spec.ts", "-t", "exactly the amount"],
+    ),
+    (
+        "Sui settles for real with no durable ledger",
+        "src/routes/settle.ts",
+        "if (!ledger) return durabilityUnavailable();",
+        "if (!ledger) return reply({ success: true, payer, transaction: digest, network });",
+        ["src/__tests__/sui-exact-route.spec.ts", "-t", "no ledger configured"],
+    ),
 ]
 
 

@@ -4,6 +4,7 @@ import logger from './lib/logger';
 import { metricsHandler } from './lib/metrics';
 import { requestIdMiddleware } from './middleware/requestId';
 import { config, getSuiGrpcUrl, getSuiNetworks, isSuiExactEnabled } from './config';
+import { getSuiSettlementLedger } from './sui/settlement-ledger';
 import { createRateLimiter } from './protection/rate-limiter';
 import { createSizeLimiter } from './protection/size-limiter';
 import { verifyPayment } from './routes/verify';
@@ -75,6 +76,10 @@ function rpcHost(url: string | undefined): string {
         base: rpcHost(config.baseRpcUrl),
         sui: suiNetworks,
       },
+      // Where Sui settlements are recorded. `none` means real Sui settlement
+      // refuses with sui_durability_unavailable. Host only: REDIS_URL carries
+      // the password.
+      suiSettlementLedger: isSuiExactEnabled() ? (getSuiSettlementLedger()?.describe() ?? 'none') : null,
       settlement: resolveSettlementMode(),
       networks: {
         baseMainnet: config.baseFacilitatorAddress || null,

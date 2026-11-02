@@ -15,7 +15,8 @@ import { normalizeStructTag, normalizeSuiAddress } from '@mysten/sui/utils';
 import type { Network } from '@x402/core/types';
 import { getSuiGrpcUrl, getSuiNetwork, getSuiNetworks } from '../config';
 import { ExactSuiScheme } from './vendor/exact/facilitator';
-import { getSuiNetworkName } from './vendor/utils';
+import type { SettlementGuard } from './vendor/types';
+import { getSuiNetworkName, matchExactPayment } from './vendor/utils';
 
 let scheme: ExactSuiScheme | undefined;
 const clients = new Map<string, SuiGrpcClient>();
@@ -47,9 +48,25 @@ export function getExactSuiScheme(): ExactSuiScheme {
     clients.set(network.caip2, client);
   }
 
-  scheme = new ExactSuiScheme({ clients: byNetwork });
+  scheme = new ExactSuiScheme({ clients: byNetwork, settlementGuard: PASS_THROUGH_GUARD });
   return scheme;
 }
+
+/**
+ * The guard handed to the vendored scheme: claims always succeed, releases do
+ * nothing.
+ *
+ * The route's durable ledger (`settlement-ledger.ts`) is the claim store, and
+ * it is what closes the replay race. The scheme's default `SettlementCache` is
+ * in-process and releases its claim after every failed settle, including one
+ * whose bytes were already broadcast; kept alongside the ledger it would be a
+ * second, weaker copy that can disagree with it. With a custom guard the scheme
+ * also skips `observeEpoch`; ledger expiry is Redis TTL.
+ */
+const PASS_THROUGH_GUARD: SettlementGuard = {
+  claim: () => true,
+  release: () => undefined,
+};
 
 /** The client a network submits through, built with the scheme. */
 function suiClient(caip2: string): SuiGrpcClient {
@@ -114,7 +131,14 @@ export async function suiTransactionDigest(transaction: unknown): Promise<string
  * payment.
  */
 export type SuiChainVerdict =
-  | { state: 'executed'; digest: string; sender: string; succeeded: boolean }
+  | {
+      state: 'executed';
+      digest: string;
+      sender: string;
+      succeeded: boolean;
+      /** Null when the node returned the transaction without balance changes. */
+      balanceChanges: readonly SuiBalanceChange[] | null;
+    }
   | { state: 'absent'; digest: string; sender: string }
   | { state: 'unknown'; digest: string; sender: string };
 
@@ -144,9 +168,11 @@ export async function suiChainVerdict(transaction: unknown, caip2: string): Prom
   } catch {
     return null;
   }
+  // Only the lookup lives in this try: a throw from reading the answer would be
+  // mistaken for "lookup failed", become `absent`, and let a replay through.
+  let executed: Awaited<ReturnType<typeof client.core.getTransaction>>;
   try {
-    const executed = await client.core.getTransaction({ digest });
-    return { state: 'executed', digest, sender, succeeded: executed.$kind === 'Transaction' };
+    executed = await client.core.getTransaction({ digest, include: { balanceChanges: true } });
   } catch {
     // The lookup failed. Was that because the transaction is not there, or
     // because the chain is not answering? A chain that cannot answer this
@@ -158,6 +184,39 @@ export async function suiChainVerdict(transaction: unknown, caip2: string): Prom
       return { state: 'unknown', digest, sender };
     }
   }
+  const tx = executed.$kind === 'Transaction' ? executed.Transaction : executed.FailedTransaction;
+  return {
+    state: 'executed',
+    digest,
+    sender,
+    succeeded: executed.$kind === 'Transaction',
+    balanceChanges: Array.isArray(tx?.balanceChanges) ? tx.balanceChanges : null,
+  };
+}
+
+type SuiBalanceChange = Parameters<typeof matchExactPayment>[0][number];
+
+/**
+ * Whether an executed transaction paid `payTo` exactly `amount` of the asset.
+ *
+ * The scheme reports success only after this check on the executed effects
+ * (settle does not simulate first), so the route must run the same check
+ * before turning a chain verdict into a success.
+ *
+ * @returns `match`, `unreadable` when the balance changes are not available,
+ *   or the mismatch description the scheme itself would report
+ */
+export function suiEffectsVerdict(
+  balanceChanges: readonly SuiBalanceChange[] | null,
+  requirements: { asset?: unknown; payTo?: unknown; amount?: unknown },
+): { kind: 'match' } | { kind: 'unreadable' } | { kind: 'mismatch'; message: string } {
+  if (!balanceChanges) return { kind: 'unreadable' };
+  const { asset, payTo, amount } = requirements;
+  if (typeof asset !== 'string' || typeof payTo !== 'string' || typeof amount !== 'string') {
+    return { kind: 'mismatch', message: 'payment requirements are incomplete' };
+  }
+  const problem = matchExactPayment(balanceChanges, asset, payTo, amount);
+  return problem ? { kind: 'mismatch', message: problem } : { kind: 'match' };
 }
 
 /**

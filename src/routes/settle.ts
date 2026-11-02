@@ -6,7 +6,8 @@ import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toC
 import { settleSolanaPayment } from '../solana/settle';
 import { verifySolanaPayment } from '../solana/verify';
 import { getExactSvmScheme } from '../solana/svm-exact';
-import { getExactSuiScheme, isAllowedSuiAsset, suiAcceptanceBindsRequirements, suiChainVerdict, suiMessageNeedsRedaction, suiTransactionDigest } from '../sui/sui-exact';
+import { getExactSuiScheme, isAllowedSuiAsset, suiAcceptanceBindsRequirements, suiChainVerdict, suiEffectsVerdict, suiMessageNeedsRedaction } from '../sui/sui-exact';
+import { getSuiSettlementLedger } from '../sui/settlement-ledger';
 import { nonceTracker } from '../protection/nonce-tracker';
 import { settleTotal, settleDuration } from '../lib/metrics';
 import { settlementQueue } from '../lib/settlement-queue';
@@ -23,6 +24,27 @@ import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, proxyAbi,
 const SOLANA_SETTLE_QUEUE_KEY = 'solana-facilitator';
 
 type SettlementMode = 'real' | 'simulated' | 'disabled';
+
+/** The ledger's `owner` is the request id, which a client may supply; bound it. */
+const LEDGER_OWNER_MAX_LENGTH = 128;
+
+/** Sui failure reasons counted under their own metric label rather than `failed`. */
+const SUI_METRIC_REASONS = new Set(['duplicate_settlement', 'settlement_pending', 'sui_durability_unavailable']);
+
+/**
+ * A ledger write after the scheme ran. It must never throw into the route's
+ * catch-all: that answers `transaction: ""`, which after a broadcast tells the
+ * payer nothing happened. A failed write leaves the record as it was, which
+ * fails safe (repeats answer pending until the chain pre-check resolves them,
+ * or the record expires).
+ */
+async function ledgerWrite(log: Logger, write: () => Promise<void>): Promise<void> {
+  try {
+    await write();
+  } catch (err) {
+    log.error({ code: (err as { code?: string }).code }, 'Sui settlement ledger write failed; record left as it was');
+  }
+}
 
 /**
  * Whether this process may move money, and how. EVERY chain must resolve it
@@ -426,10 +448,12 @@ export async function settlePayment(req: Request, res: Response) {
     // protocol defines settle that way, and the extra simulate would diverge
     // from the reference implementation without changing what the caller sees.
     //
-    // Dedup is the scheme's claim store, not nonceTracker: the claim is keyed on
-    // (network, digest) and reports `duplicate_settlement`, so success is
-    // reported at most once — unlike the EVM path, which replays its original
-    // success.
+    // Dedup is the durable Sui settlement ledger (`settlement-ledger.ts`), not
+    // nonceTracker and not the scheme's own claim store: the record is keyed on
+    // (network, digest), shared across machines and restarts, and never released
+    // once the bytes may have been broadcast. A repeat answers
+    // `duplicate_settlement` once executed — unlike the EVM path, which replays
+    // its original success.
     if (network?.startsWith('sui:')) {
       log.debug({ network }, 'Sui settlement');
       if (!isSuiExactEnabled() || !isSuiNetworkServed(network)) {
@@ -476,12 +500,12 @@ export async function settlePayment(req: Request, res: Response) {
           return res.json({ success: true, payer: verified.payer || 'unknown', transaction: `SIMULATED${Date.now()}`, network });
         }
 
-        // The scheme's only replay guard is an in-process claim store, so a
-        // restart — every deploy — empties it, and a fullnode answers a
-        // re-submitted, already-executed transaction with its cached effects.
-        // Without asking the chain first, the replay would be reported as a
-        // second success and the resource server would deliver twice for one
-        // payment. The chain is the authority; the claim store is a cache.
+        // The ledger is the replay guard; the chain is the authority behind it.
+        // The ledger is shared by every machine and survives a deploy, but its
+        // records expire, and a fullnode answers a re-submitted, executed
+        // transaction with its cached effects as if it were new. So an
+        // executed-and-successful digest is refused here first, whatever the
+        // ledger holds.
         const verdict = await suiChainVerdict(paymentPayload.payload?.transaction, network);
         if (verdict?.state === 'executed' && verdict.succeeded) {
           log.warn({ network, digest: verdict.digest }, 'Sui transaction already executed on chain; refusing to report a second success');
@@ -496,69 +520,147 @@ export async function settlePayment(req: Request, res: Response) {
             errorMessage: `transaction ${verdict.digest} is already executed on chain`,
           });
         }
-
-        const settled = await sui.settle(paymentPayload, paymentRequirements);
-        // The scheme answers a duplicate with an empty `transaction`, which
-        // reads as "nothing happened" and would push the payer to sign a second
-        // payment. The claim that failed is keyed on this payload's digest, so
-        // report it: an answer after broadcast never omits the hash.
-        const submittedDigest =
-          settled.transaction || (await suiTransactionDigest(paymentPayload.payload?.transaction)) || verdict?.digest || '';
-        let response =
-          !settled.success && settled.errorReason === 'duplicate_settlement' && !settled.transaction
-            ? { ...settled, transaction: submittedDigest }
-            : settled;
-
-        // `transaction_failed` is the scheme's code for "I could not tell what
-        // happened". It covers a receipt it could not read, a submit that threw
-        // after broadcast, and failures that never left this process — and the
-        // route cannot tell those apart, because every one of them leaves the
-        // same shape. The chain decides: executed-and-succeeded is not a failure
-        // at all, and executed-and-failed is terminal. But "the chain holds no
-        // such transaction" is NOT proof that nothing was broadcast: a node that
-        // accepted the bytes and then lost the receipt, or a fullnode that has
-        // not finished indexing, answers the same not-found as a rejection. Only
-        // a confirmed on-chain failure is terminal after a broadcast, so absent
-        // and unreadable both stay non-terminal.
-        if (!response.success && response.errorReason === 'transaction_failed') {
-          const after = await suiChainVerdict(paymentPayload.payload?.transaction, network);
-          const digest = after?.digest || submittedDigest;
-          if (after?.state === 'executed' && after.succeeded) {
-            log.warn({ network, digest }, 'Sui reported failure for a transaction the chain executed successfully');
-            response = {
-              ...response,
-              transaction: digest,
-              errorReason: 'duplicate_settlement',
-              errorMessage: `transaction ${digest} is already executed on chain; do not re-authorize`,
-            };
-          } else if (after?.state === 'executed') {
-            // Confirmed on-chain failure: terminal, and the payer may retry.
-            response = { ...response, transaction: digest };
-          } else {
-            // Absent or unreadable. A digest the chain does not hold may still
-            // be queued, so a terminal answer here would invite a second
-            // authorization for a payment that lands.
-            log.warn({ network, digest, state: after?.state ?? 'unread' }, 'Sui settlement outcome not confirmed after broadcast; reporting pending');
-            response = {
-              ...response,
-              transaction: digest,
-              errorReason: 'settlement_pending',
-              errorMessage: 'the transaction may have been broadcast and its outcome is not yet known; reconcile the digest before a new authorization',
-            };
+        // Without a digest there is no ledger key, so nothing may be submitted.
+        if (!verdict) {
+          settleTotal.inc({ network, result: 'failed' });
+          recordDuration(startTime, network);
+          return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'invalid_exact_sui_payload_transaction_could_not_be_decoded' });
+        }
+        const digest = verdict.digest;
+        const payer = verdict.sender || 'unknown';
+        const reply = (answer: Record<string, unknown>) => {
+          const body = { ...answer };
+          // Transport and node text never reaches a caller: it can carry the
+          // gRPC endpoint, which carries the provider key on most providers.
+          if (suiMessageNeedsRedaction(body.errorReason)) {
+            log.warn({ network, errorReason: body.errorReason, detail: body.errorMessage }, 'Sui settlement detail withheld from the caller');
+            body.errorMessage = 'the Sui network did not complete the settlement; see the facilitator log';
           }
+          const ok = body.success === true;
+          const reason = String(body.errorReason ?? '');
+          settleTotal.inc({ network, result: ok ? 'success' : SUI_METRIC_REASONS.has(reason) ? reason : 'failed' });
+          recordDuration(startTime, network);
+          log.info({ action: 'settle', network, success: ok, transaction: body.transaction, errorReason: body.errorReason }, 'Settle complete');
+          return res.json(body);
+        };
+        const pending = (message: string) =>
+          reply({ success: false, payer, transaction: digest, network, errorReason: 'settlement_pending', errorMessage: message });
+
+        // Real settlement needs the durable ledger. Without it the only guard
+        // would be per-process, which is the defect the ledger fixes.
+        const ledger = getSuiSettlementLedger();
+        const durabilityUnavailable = (err?: unknown) => {
+          // Redis errors embed the URL, which carries the password: log the code only.
+          log.error({ network, digest, code: (err as { code?: string } | undefined)?.code, errorReason: 'sui_durability_unavailable' }, 'Real Sui settlement refused: settlement ledger unavailable');
+          return reply({ success: false, payer, transaction: '', network, errorReason: 'sui_durability_unavailable' });
+        };
+        if (!ledger) return durabilityUnavailable();
+        const key = { network, digest };
+        let claimed: boolean;
+        try {
+          claimed = await ledger.claim(key, String(res.locals.requestId ?? '').slice(0, LEDGER_OWNER_MAX_LENGTH));
+        } catch (err) {
+          return durabilityUnavailable(err);
+        }
+        if (!claimed) {
+          let existing;
+          try {
+            existing = await ledger.get(key);
+          } catch (err) {
+            return durabilityUnavailable(err);
+          }
+          if (existing?.state === 'executed') {
+            return reply({ success: false, payer, transaction: digest, network, errorReason: 'duplicate_settlement', errorMessage: `transaction ${digest} is already executed on chain` });
+          }
+          if (verdict.state === 'executed') {
+            // Confirmed on-chain failure: no funds moved, so the record no
+            // longer protects anything and the payer may sign again.
+            await ledgerWrite(log, () => ledger.release(key));
+            return reply({ success: false, payer, transaction: digest, network, errorReason: 'transaction_failed', errorMessage: `transaction ${digest} failed on chain` });
+          }
+          return pending('another settle of this transaction is in progress or unresolved; reconcile the digest before a new authorization');
         }
 
-        // Transport and node text never reaches a caller: it can carry the gRPC
-        // endpoint, which carries the provider key on most providers.
-        if (suiMessageNeedsRedaction(response.errorReason)) {
-          log.warn({ network, errorReason: response.errorReason, detail: response.errorMessage }, 'Sui settlement detail withheld from the caller');
-          response = { ...response, errorMessage: 'the Sui network did not complete the settlement; see the facilitator log' };
+        // From here this request owns the record. Every path below leaves it in
+        // exactly one state: released (nothing was broadcast, or the chain
+        // confirms the transaction failed), `broadcast` (outcome unknown), or
+        // `executed` (final).
+        let settled: Awaited<ReturnType<typeof sui.settle>>;
+        try {
+          settled = await sui.settle(paymentPayload, paymentRequirements);
+        } catch (err) {
+          // The scheme answers every failure it observes itself; a throw is pre-broadcast.
+          await ledgerWrite(log, () => ledger.release(key));
+          throw err;
         }
 
-        settleTotal.inc({ network, result: response.success ? 'success' : 'failed' });
-        recordDuration(startTime, network);
-        log.info({ action: 'settle', network, success: response.success, transaction: response.transaction }, 'Settle complete');
-        return res.json(response);
+        if (settled.success) {
+          await ledgerWrite(log, () => ledger.mark(key, 'executed'));
+          return reply({ ...settled, transaction: settled.transaction || digest });
+        }
+
+        // The scheme's failures before submit go through its `failure()`
+        // helper and carry `transaction: ""`; every failure from its submit
+        // path — after the bytes were sent — carries the digest. That is the
+        // only signal of whether THIS request broadcast, and it decides whether
+        // a chain success is ours (success) or someone else's (duplicate).
+        const broadcastByUs = settled.transaction !== '';
+
+        if (!broadcastByUs && settled.errorReason === 'duplicate_settlement') {
+          // The scheme's own guard is pass-through, so this is not expected; if
+          // an upstream change makes it reachable, keep the record (the scheme
+          // believes the bytes were settled) and never answer without the hash.
+          return reply({ ...settled, transaction: digest });
+        }
+        if (!broadcastByUs && settled.errorReason !== 'transaction_failed') {
+          await ledgerWrite(log, () => ledger.release(key));
+          return reply(settled);
+        }
+
+        if (broadcastByUs && settled.errorReason !== 'transaction_failed') {
+          // `settlement_effects_mismatch`: executed on chain, wrong effects.
+          // Final either way; never re-reportable as a success.
+          await ledgerWrite(log, () => ledger.mark(key, 'executed'));
+          return reply(settled);
+        }
+
+        // `transaction_failed`: the scheme could not tell what happened. The
+        // chain decides. "Not found" is not proof nothing was broadcast (a lost
+        // receipt and an unindexed transaction answer the same), so only an
+        // executed transaction is decisive.
+        if (broadcastByUs) await ledgerWrite(log, () => ledger.mark(key, 'broadcast'));
+        const after = await suiChainVerdict(paymentPayload.payload?.transaction, network);
+        if (after?.state === 'executed' && after.succeeded) {
+          if (!broadcastByUs) {
+            log.warn({ network, digest }, 'Sui transaction executed on chain by another submitter');
+            await ledgerWrite(log, () => ledger.mark(key, 'executed'));
+            return reply({ ...settled, transaction: digest, errorReason: 'duplicate_settlement', errorMessage: `transaction ${digest} is already executed on chain; do not re-authorize` });
+          }
+          const effects = suiEffectsVerdict(after.balanceChanges, paymentRequirements);
+          if (effects.kind === 'unreadable') {
+            return pending('the transaction executed and its balance changes are not yet readable; reconcile the digest before a new authorization');
+          }
+          await ledgerWrite(log, () => ledger.mark(key, 'executed'));
+          if (effects.kind === 'mismatch') {
+            return reply({ success: false, payer, transaction: digest, network, errorReason: 'settlement_effects_mismatch', errorMessage: effects.message });
+          }
+          log.warn({ network, digest }, 'Sui receipt was lost after broadcast; chain shows this request\'s transaction executed with the expected effects');
+          return reply({ success: true, payer, transaction: digest, network });
+        }
+        if (after?.state === 'executed') {
+          // Confirmed on-chain failure: terminal, no funds moved, payer may retry.
+          await ledgerWrite(log, () => ledger.release(key));
+          return reply({ ...settled, transaction: digest });
+        }
+        // Absent or unreadable.
+        if (!broadcastByUs) {
+          // Nothing left this process, so the record protects nothing: release it
+          // and let a retry submit the same bytes. Still pending rather than
+          // terminal — a retry of the same bytes is safe, a new authorization is not.
+          await ledgerWrite(log, () => ledger.release(key));
+        }
+        log.warn({ network, digest, state: after?.state ?? 'unread', broadcastByUs }, 'Sui settlement outcome not confirmed; reporting pending');
+        return pending('the transaction may have been broadcast and its outcome is not yet known; reconcile the digest before a new authorization');
       } catch (suiErr) {
         // The scheme answers every failure it can observe itself, carrying the
         // digest when a transaction was broadcast. A throw that reaches here is
