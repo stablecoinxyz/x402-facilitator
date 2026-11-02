@@ -1,6 +1,10 @@
 # Grafana Alert Rules for x402 Facilitator
 #
 # GENERATED FROM THE LIVE RULES on 2026-08-26; execErrState and routing updated 2026-09-29.
+# Re-checked against all 9 live rules 2026-11-02: only "Settle faults on our
+# side" differed. Its live query had never received settlement_proxy_unavailable
+# and settlement_asset_unavailable (this file had them); both were added live
+# 2026-11-02 together with sui_durability_unavailable.
 # Regenerate rather than hand-edit, so this file cannot drift from what
 # actually fires:
 #   curl -H "Authorization: Bearer $GRAFANA_TOKEN" \
@@ -24,7 +28,9 @@
 # Settle result labels, split by whose fault the outcome is. The split is
 # what the alerts key off — do not add a label without placing it.
 #
-#   OK            success, replay
+#   OK            success, replay,
+#                 duplicate_settlement (Sui: these signed bytes were already
+#                 settled; the refusal is the replay guard working)
 #   CLIENT FAULT  bad_request, expired, invalid_signature, failed
 #                 Facilitator worked and rejected bad input. Never pages.
 #   OUR FAULT     rpc_error, receipt_timeout, nonce_conflict, gas_error,
@@ -40,6 +46,10 @@
 #                 token address has no deployed bytecode on the target
 #                 chain: a misconfigured chain refusing every settle for
 #                 that asset before broadcast, which must page),
+#                 sui_durability_unavailable (the Sui settlement ledger,
+#                 Redis via REDIS_URL, is unset or unreachable: real Sui
+#                 settlement refuses every payment before submit, which
+#                 must page),
 #                 settlement_pending (the transfer was broadcast and its
 #                 receipt could not be read: the money may have moved and a
 #                 human must reconcile the hash on chain, so it pages. Before
@@ -68,7 +78,7 @@ rules:
     severity: critical
     for: 0s
     condition: >
-      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|settlement_pending|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown|settlement_disabled|settlement_proxy_unavailable|settlement_asset_unavailable"}[15m])) > 1.5
+      sum(increase(x402_settle_total{result=~"rpc_error|receipt_timeout|settlement_pending|nonce_conflict|gas_error|insufficient_allowance|tx_reverted|unknown|settlement_disabled|settlement_proxy_unavailable|settlement_asset_unavailable|sui_durability_unavailable"}[15m])) > 1.5
     summary: "2+ facilitator-fault settle errors in 15 minutes"
     action: "Counts only results the facilitator is responsible for. Client-caused rejections (bad_request, expired, invalid_signature, failed) are deliberately excluded \u2014 a public endpoint gets scanned and those must never page. Loki: {app=\"sbc-x402-facilitator\"} | json | line_format \"{{.message}}\" | json | action=\"settle\""
 
