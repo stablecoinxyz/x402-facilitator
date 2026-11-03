@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { CASPER_MAINNET_CAIP2, CASPER_TESTNET_CAIP2 } from './casper/networks';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
@@ -66,6 +67,17 @@ export const config = {
   } as Record<string, string>,
   sbcTokenAddress: process.env.SBC_TOKEN_ADDRESS || 'DBAzBUXaLj1qANCseUPZz4sp9F8d2sc78C4vKjhbTGMA',
   sbcDecimals: 9,
+
+  // Casper Configuration
+  // Settlement runs through the Casper facilitator service, so no signing key is
+  // held here — only the service URL and the wCSPR (CEP-18) contract per network.
+  casperFacilitatorUrl: process.env.CASPER_FACILITATOR_URL || 'https://x402-facilitator.cspr.cloud',
+  casperFacilitatorTimeoutMs: parseInt(process.env.CASPER_FACILITATOR_TIMEOUT_MS || '15000'),
+  casperFacilitatorAddress: process.env.CASPER_FACILITATOR_ADDRESS || '',
+  casperWcsprContract: process.env.CASPER_WCSPR_CONTRACT || '',
+  casperTestnetWcsprContract: process.env.CASPER_TESTNET_WCSPR_CONTRACT || '',
+  // wCSPR is CEP-18 with 9 decimals; the base unit is the mote.
+  casperDecimals: 9,
 };
 
 /** CAIP-2 identifier for Solana mainnet (truncated genesis hash). */
@@ -185,11 +197,15 @@ const V1_NETWORK_TO_CAIP2: Record<string, string> = {
   'solana': SOLANA_MAINNET_CAIP2,
   'solana-devnet': SOLANA_DEVNET_CAIP2,
   'solana-testnet': SOLANA_TESTNET_CAIP2,
+  'casper': CASPER_MAINNET_CAIP2,
+  'casper-test': CASPER_TESTNET_CAIP2,
 };
 
 /** Additional inbound spellings we accept but never advertise. */
 const V1_NETWORK_ALIASES: Record<string, string> = {
   'solana-mainnet': SOLANA_MAINNET_CAIP2,
+  'casper-mainnet': CASPER_MAINNET_CAIP2,
+  'casper-testnet': CASPER_TESTNET_CAIP2,
 };
 
 /**
