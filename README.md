@@ -2,7 +2,7 @@
 
 SBC x402 Facilitator — verifies and settles payments using the [x402 protocol](https://github.com/coinbase/x402) (v2).
 
-Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 support is used only by the optional `eip2612GasSponsoring` extension to establish Permit2 allowance; the Permit2 witness and canonical x402 proxy bind the payment recipient and amount. Solana delegated-SPL simulation is available for development; real Solana settlement is intentionally disabled pending durable replay storage.
+EVM chains support both standard x402 Exact EVM transfer methods: **EIP-3009** (`transferWithAuthorization` on the token — the spec default, used when `assetTransferMethod` is absent) on tokens that implement it, and **Permit2** (`assetTransferMethod: "permit2"`) on every configured token. SBC's ERC-2612 support is used only by the optional `eip2612GasSponsoring` extension to establish Permit2 allowance; the Permit2 witness and canonical x402 proxy bind the payment recipient and amount. Solana delegated-SPL simulation is available for development; real Solana settlement is intentionally disabled pending durable replay storage.
 
 **[x402 v2 Compatibility →](./x402-COMPATIBILITY.md)** — unit suite green (`npm test`); the `npm run conformance` harness still builds legacy ERC-2612 EVM payloads and is pending migration to Permit2 | **[Observability →](./grafana/README.md)**
 
@@ -10,10 +10,10 @@ Uses the standard x402 Permit2 Exact EVM flow for EVM chains. SBC's ERC-2612 sup
 
 | Network | CAIP-2 ID | Env Prefix | Mechanism |
 |---------|-----------|-----------|-----------|
-| Base | `eip155:8453` | `BASE_` | Permit2 + canonical x402 proxy |
-| Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | Permit2 + canonical x402 proxy |
-| Radius | `eip155:723487` | `RADIUS_` | Permit2 + canonical x402 proxy |
-| Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | Permit2 + canonical x402 proxy |
+| Base | `eip155:8453` | `BASE_` | EIP-3009 (SBC, USDC) · Permit2 + canonical x402 proxy |
+| Base Sepolia | `eip155:84532` | `BASE_SEPOLIA_` | EIP-3009 (USDC only; SBC here has no EIP-3009) · Permit2 + canonical x402 proxy |
+| Radius | `eip155:723487` | `RADIUS_` | EIP-3009 (SBC) · Permit2 + canonical x402 proxy |
+| Radius Testnet | `eip155:72344` | `RADIUS_TESTNET_` | EIP-3009 (SBC) · Permit2 + canonical x402 proxy |
 | Casper | `casper:casper` | `CASPER_` | wCSPR (CEP-18) transfer via Casper facilitator |
 | Casper Testnet | `casper:casper-test` | `CASPER_TESTNET_` | wCSPR (CEP-18) transfer via Casper facilitator |
 
@@ -89,6 +89,12 @@ The facilitator is permissionless — no API key needed. Rate limiting is applie
 ```
 
 `payload.permit2Authorization` is the signed Permit2 witness. `spender` is the canonical x402 proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`), `permitted.token` is the asset, and `witness.to` is the merchant `payTo` — the proxy enforces `witness.to`, so the facilitator cannot redirect the payment. If the payer has not pre-approved Permit2 on-chain, add an `eip2612GasSponsoring` extension under `extensions` carrying a signed SBC ERC-2612 permit. Its `info` object holds `from`, `asset`, `spender` (the Permit2 contract `0x000000000022D473030F116dDEE9F6B43aC78BA3`), `amount`, `nonce`, `deadline`, `signature`, and `version: "1"`. The sponsored `amount` must equal the exact payment amount (an over-broad allowance is rejected) and `deadline` must be at least the Permit2 authorization `deadline`.
+
+### EIP-3009 payload
+
+With EIP-3009 the `payload` is `{ signature, authorization: { from, to, value, validAfter, validBefore, nonce } }`, signed as `TransferWithAuthorization` against the token's own EIP-712 domain (`extra.name` / `extra.version`; this facilitator checks against its configured values, which match the chain). `authorization.to` must equal `payTo` and `value` must equal `amount` exactly; the token itself enforces both, plus the validity window and the one-time `nonce`. `/settle` needs `validBefore` at least 6 seconds out (upstream's margin; the stock client sets `validBefore = now + maxTimeoutSeconds`). Only 65-byte EOA signatures are accepted for now.
+
+A used authorization is never answered as a success: `/verify` and `/settle` answer `invalid_exact_evm_nonce_already_used` with an empty `transaction`. After settlement the authorization is public on chain, so answering success would let anyone replay it to a merchant for a second delivery. Keep the first `/settle` answer. Prove a deployment end to end with `npm run prove:eip3009` (stock `@x402/evm` client; see the script header for env).
 
 ## Configuration
 

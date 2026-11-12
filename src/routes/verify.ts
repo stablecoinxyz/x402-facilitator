@@ -11,6 +11,8 @@ import { verifyTotal, verifyDuration } from '../lib/metrics';
 import logger from '../lib/logger';
 import { parseAmount } from '../lib/amount';
 import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, PERMIT2_ADDRESS } from '../evm/permit2';
+import { selectsEip3009, eip3009Abi, transferWithAuthorizationArgs } from '../evm/eip3009';
+import { checkEip3009Payment } from '../evm/eip3009-check';
 
 /**
  * Payment Verification Handler - x402 V2 Exact
@@ -18,7 +20,8 @@ import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, PERMIT2_A
  * Verifies payment authorizations for multiple networks:
  *
  * - Solana: Ed25519 signature verification (handled by solana/verify.ts)
- * - Base/Radius: Permit2 witness verification (official Exact EVM path). Legacy
+ * - Base/Radius: EIP-3009 (`assetTransferMethod` "eip3009" or absent, on tokens that
+ *   implement it; src/evm/eip3009-check.ts) or Permit2 witness verification. Legacy
  *   ERC-2612 EVM authorizations are rejected; the ERC-2612 code further down is
  *   currently unreachable.
  */
@@ -360,6 +363,33 @@ export async function verifyPayment(req: Request, res: Response) {
         payer: paymentPayload.payload?.authorization?.from || 'unknown',
         invalidReason: 'invalid_network'
       });
+    }
+
+    // x402 Exact EVM, EIP-3009. The spec default: an absent assetTransferMethod
+    // selects it. Dispatch is on the requirements, never on the payload shape.
+    if (selectsEip3009(paymentRequirements)) {
+      const checked = await checkEip3009Payment(paymentPayload, paymentRequirements, networkConfig, 0n, log);
+      if (!checked.ok) {
+        verifyTotal.inc({ network, result: 'invalid' });
+        recordDuration(startTime, network);
+        return res.json({ isValid: false, payer: checked.payer, invalidReason: checked.reason });
+      }
+      // eth_call of the transfer itself. Skipped on Radius, as the Permit2 path
+      // skips its proxy simulation there (docs/radius-compatibility.md).
+      const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
+      if (!isRadius) {
+        try {
+          await checked.client.simulateContract({ address: checked.token.address as `0x${string}`, abi: eip3009Abi, functionName: 'transferWithAuthorization', args: transferWithAuthorizationArgs(checked.auth, checked.signature) as any });
+        } catch (simErr) {
+          log.warn({ err: simErr, network, payer: checked.auth.from }, 'EIP-3009 simulation failed');
+          verifyTotal.inc({ network, result: 'invalid' });
+          recordDuration(startTime, network);
+          return res.json({ isValid: false, payer: checked.auth.from, invalidReason: 'invalid_transaction_state' });
+        }
+      }
+      verifyTotal.inc({ network, result: 'valid' });
+      recordDuration(startTime, network);
+      return res.json({ isValid: true, payer: checked.auth.from, invalidReason: null, remainingSeconds: Number(BigInt(checked.auth.validBefore) - BigInt(Math.floor(Date.now() / 1000))) });
     }
 
     // Official x402 Exact EVM Permit2 path. Legacy ERC-2612 payloads are not

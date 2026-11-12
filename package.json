@@ -36,6 +36,8 @@
     "prove:svm-devnet": "tsx scripts/prove-svm-exact-devnet.ts",
     "prove:svm-mainnet": "tsx scripts/prove-svm-exact-mainnet.ts",
     "prove:sui-testnet": "SUI_EXACT_ENABLED=true SUI_NETWORKS=sui:testnet SUI_GRPC_URL_TESTNET=${SUI_GRPC_URL_TESTNET:-https://fullnode.testnet.sui.io:443} tsx scripts/prove-sui-exact.ts",
+    "prove:eip3009": "tsx scripts/prove-eip3009.ts",
+    "prove:eip3009:fork": "BASE_RPC_URL=${FORK_RPC_URL:?set FORK_RPC_URL to the anvil fork} BASE_FACILITATOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 BASE_FACILITATOR_ADDRESS=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 ENABLE_REAL_SETTLEMENT=true EIP3009_PROVE_FORK=1 EIP3009_PROVE_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d tsx scripts/prove-eip3009.ts",
     "prove:sui-mainnet": "SUI_EXACT_ENABLED=true SUI_NETWORKS=sui:mainnet SUI_GRPC_URL_MAINNET=${SUI_GRPC_URL_MAINNET:-https://fullnode.mainnet.sui.io:443} tsx scripts/prove-sui-exact.ts"
   },
   "dependencies": {
@@ -43,8 +45,8 @@
     "@solana/kit": "^5.1.0",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
-    "@x402/core": "^2.26.0",
-    "@x402/svm": "^2.26.0",
+    "@x402/core": "2.26.0",
+    "@x402/svm": "2.26.0",
     "bs58": "5.0.0",
     "cors": "2.8.5",
     "dotenv": "16.6.1",
@@ -64,6 +66,7 @@
     "@types/node": "20.19.27",
     "@types/supertest": "6.0.3",
     "@types/uuid": "10.0.0",
+    "@x402/evm": "2.26.0",
     "jest": "29.7.0",
     "supertest": "6.3.4",
     "ts-jest": "29.4.6",

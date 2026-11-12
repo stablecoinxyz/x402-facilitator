@@ -244,22 +244,29 @@ export function toV1Network(caip2: string): string | null {
  * Resolve an asset address to token config for a given EVM chain.
  * Returns null if the asset is not whitelisted for that chain.
  */
-export function resolveToken(chainId: number, asset: string): { address: string; decimals: number; name: string; version: string } | null {
+/**
+ * Whether a token implements EIP-3009 `transferWithAuthorization`. Read on chain
+ * 2026-11-12 (`TRANSFER_WITH_AUTHORIZATION_TYPEHASH()` returns the standard hash).
+ * Base Sepolia SBC reverts on that getter, so it stays Permit2-only.
+ */
+export type ResolvedToken = { address: string; decimals: number; name: string; version: string; eip3009: boolean };
+
+export function resolveToken(chainId: number, asset: string): ResolvedToken | null {
   const a = asset.toLowerCase();
 
   if (chainId === config.baseChainId) {
-    if (a === config.baseSbcTokenAddress.toLowerCase()) return { address: config.baseSbcTokenAddress, decimals: config.baseSbcDecimals, name: 'Stable Coin', version: '1' };
-    if (a === config.baseUsdcTokenAddress.toLowerCase()) return { address: config.baseUsdcTokenAddress, decimals: config.baseUsdcDecimals, name: 'USD Coin', version: '2' };
+    if (a === config.baseSbcTokenAddress.toLowerCase()) return { address: config.baseSbcTokenAddress, decimals: config.baseSbcDecimals, name: 'Stable Coin', version: '1', eip3009: true };
+    if (a === config.baseUsdcTokenAddress.toLowerCase()) return { address: config.baseUsdcTokenAddress, decimals: config.baseUsdcDecimals, name: 'USD Coin', version: '2', eip3009: true };
   }
   if (chainId === config.baseSepoliaChainId) {
-    if (a === config.baseSepoliaSbcTokenAddress.toLowerCase()) return { address: config.baseSepoliaSbcTokenAddress, decimals: config.baseSepoliaSbcDecimals, name: 'Stable Coin', version: '1' };
-    if (a === config.baseSepoliaUsdcTokenAddress.toLowerCase()) return { address: config.baseSepoliaUsdcTokenAddress, decimals: config.baseSepoliaUsdcDecimals, name: 'USDC', version: '2' };
+    if (a === config.baseSepoliaSbcTokenAddress.toLowerCase()) return { address: config.baseSepoliaSbcTokenAddress, decimals: config.baseSepoliaSbcDecimals, name: 'Stable Coin', version: '1', eip3009: false };
+    if (a === config.baseSepoliaUsdcTokenAddress.toLowerCase()) return { address: config.baseSepoliaUsdcTokenAddress, decimals: config.baseSepoliaUsdcDecimals, name: 'USDC', version: '2', eip3009: true };
   }
   if (chainId === config.radiusChainId || chainId === 723487) {
-    if (a === config.radiusSbcTokenAddress.toLowerCase()) return { address: config.radiusSbcTokenAddress, decimals: config.radiusSbcDecimals, name: 'Stable Coin', version: '1' };
+    if (a === config.radiusSbcTokenAddress.toLowerCase()) return { address: config.radiusSbcTokenAddress, decimals: config.radiusSbcDecimals, name: 'Stable Coin', version: '1', eip3009: true };
   }
   if (chainId === config.radiusTestnetChainId) {
-    if (a === config.radiusTestnetSbcTokenAddress.toLowerCase()) return { address: config.radiusTestnetSbcTokenAddress, decimals: config.radiusTestnetSbcDecimals, name: 'Stable Coin', version: '1' };
+    if (a === config.radiusTestnetSbcTokenAddress.toLowerCase()) return { address: config.radiusTestnetSbcTokenAddress, decimals: config.radiusTestnetSbcDecimals, name: 'Stable Coin', version: '1', eip3009: true };
   }
 
   return null;
