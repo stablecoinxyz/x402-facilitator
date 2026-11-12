@@ -18,6 +18,17 @@ import { parseAmount } from '../lib/amount';
 import { resolveEvmFacilitatorAddress } from './verify';
 import logger from '../lib/logger';
 import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
+import { selectsEip3009, eip3009Abi, transferWithAuthorizationArgs, EIP3009_NONCE_ALREADY_USED } from '../evm/eip3009';
+import { checkEip3009Offline, checkEip3009Chain, receiptHasTransfer } from '../evm/eip3009-check';
+
+/**
+ * An EIP-3009 authorization must stay valid this long for /settle to broadcast it.
+ * Matches upstream `@x402/evm` (`validBefore < now + 6` is refused). The stock client
+ * sets `validBefore = now + maxTimeoutSeconds`, so a larger margin would refuse every
+ * payment from a seller whose timeout is at or below it. A transaction that still
+ * lands after `validBefore` reverts on chain and is answered with its hash.
+ */
+const EIP3009_SETTLE_MARGIN_SECONDS = 6n;
 
 /**
  * Solana settlements share one serialization queue. Unlike EVM there is no
@@ -73,7 +84,8 @@ export function resolveSettlementMode(): SettlementMode {
  * - Solana: Delegated SPL token transfer (handled by solana/settle.ts)
  *   Facilitator executes transfer as delegate: Agent → Merchant
  *
- * - Base/Radius: Permit2 via the canonical x402 proxy (official Exact EVM path).
+ * - Base/Radius: EIP-3009 `transferWithAuthorization` on the token (method "eip3009"
+ *   or absent), or Permit2 via the canonical x402 proxy (method "permit2").
  *   The facilitator calls settle() / settleWithPermit() on the proxy, which
  *   enforces the signed witness recipient. Legacy ERC-2612 EVM authorizations
  *   are rejected; the permit() + transferFrom() code further down is currently
@@ -738,7 +750,78 @@ export async function settlePayment(req: Request, res: Response) {
       });
     }
 
-    // Standard x402 Exact EVM settlement: only Permit2 payloads are accepted.
+    // x402 Exact EVM, EIP-3009 (`transferWithAuthorization` on the token). The
+    // spec default: an absent assetTransferMethod selects it. Every check runs
+    // here; /settle never relies on a prior /verify.
+    if (selectsEip3009(paymentRequirements)) {
+      const refuse = (r: { reason: string; payer: string; metric: string }) => {
+        settleTotal.inc({ network, result: r.metric === 'invalid' ? 'failed' : r.metric });
+        recordDuration(startTime, network);
+        return res.json({ success: false, payer: r.payer, transaction: '', network, errorReason: r.reason });
+      };
+      const offline = await checkEip3009Offline(paymentPayload, paymentRequirements, networkConfig, EIP3009_SETTLE_MARGIN_SECONDS);
+      if (!offline.ok) return refuse(offline);
+      // Mode is decided before any RPC, as on the Permit2 path: disabled and
+      // simulated settlement never touch the chain.
+      const mode = resolveSettlementMode();
+      if (mode === 'disabled') {
+        settleTotal.inc({ network, result: 'settlement_disabled' }); recordDuration(startTime, network);
+        return res.json({ success: false, payer: offline.auth.from, transaction: '', network, errorReason: 'settlement_disabled' });
+      }
+      if (mode === 'simulated') {
+        const previous = nonceTracker.getSettled(network, offline.auth.from, offline.auth.nonce);
+        res.set('X-Settlement-Mode', 'simulated');
+        if (previous?.simulated) return res.json({ success: true, payer: previous.payer, transaction: previous.txHash, network: previous.network });
+        const txHash = `SIMULATED${Math.random().toString(36).slice(2)}${Date.now()}`;
+        nonceTracker.markSettled(network, offline.auth.from, offline.auth.nonce, { txHash, payer: offline.auth.from, network, simulated: true });
+        return res.json({ success: true, payer: offline.auth.from, transaction: txHash, network });
+      }
+      const checked = await checkEip3009Chain(offline, networkConfig, log);
+      if (!checked.ok) return refuse(checked);
+      const { auth, signature, token, client } = checked;
+      if (!networkConfig.privateKey) throw new Error(`Facilitator private key not configured for ${networkConfig.label}`);
+      const chain = { id: networkConfig.chainId, name: networkConfig.label, nativeCurrency: { decimals: 18, name: 'Native', symbol: 'NATIVE' }, rpcUrls: { default: { http: [networkConfig.rpcUrl] } } };
+      const account = privateKeyToAccount(networkConfig.privateKey as `0x${string}`);
+      const wallet = createWalletClient({ account, chain, transport: http(networkConfig.rpcUrl) });
+      const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
+      const tokenAddress = token.address as `0x${string}`;
+      const args = transferWithAuthorizationArgs(auth, signature) as any;
+      const outcome = await settlementQueue.enqueue(account.address, async (): Promise<{ used: true } | { used: false; hash: `0x${string}`; transferSeen: boolean }> => {
+        // Inside the queue: a concurrent duplicate waits here until the first one
+        // is mined, then finds the nonce used instead of broadcasting a revert.
+        const used = await client.readContract({ address: tokenAddress, abi: eip3009Abi, functionName: 'authorizationState', args: [auth.from as `0x${string}`, auth.nonce as `0x${string}`] });
+        if (used) return { used: true };
+        if (!isRadius) await client.simulateContract({ account: account.address, address: tokenAddress, abi: eip3009Abi, functionName: 'transferWithAuthorization', args });
+        const gasOverrides: { gasPrice?: bigint } = {};
+        if (isRadius) gasOverrides.gasPrice = (await client.getGasPrice()) + 1000000000n;
+        const hash = await wallet.writeContract({ address: tokenAddress, abi: eip3009Abi, functionName: 'transferWithAuthorization', args, ...gasOverrides });
+        let receipt;
+        try { receipt = await client.waitForTransactionReceipt({ hash, confirmations: 1 }); }
+        catch (error: any) { error.broadcastHash = hash; error.settlementPending = true; throw error; }
+        if (receipt.status === 'reverted') {
+          const err: any = new Error('EIP-3009 settlement reverted');
+          err.broadcastHash = hash;
+          err.transactionReverted = true;
+          throw err;
+        }
+        return { used: false, hash, transferSeen: receiptHasTransfer(receipt.logs, tokenAddress, auth) };
+      });
+      if (outcome.used) {
+        settleTotal.inc({ network, result: 'failed' }); recordDuration(startTime, network);
+        return res.json({ success: false, payer: auth.from, transaction: '', network, errorReason: EIP3009_NONCE_ALREADY_USED });
+      }
+      if (!outcome.transferSeen) {
+        // Mined and succeeded, but the token did not log the transfer we signed
+        // for. Not a success we can vouch for; the hash goes back for reconciling.
+        log.error({ network, payer: auth.from, txHash: outcome.hash, errorReason: 'settlement_effects_mismatch' }, 'EIP-3009 receipt lacks the expected Transfer event');
+        settleTotal.inc({ network, result: 'settlement_effects_mismatch' }); recordDuration(startTime, network);
+        return res.json({ success: false, payer: auth.from, transaction: outcome.hash, network, errorReason: 'settlement_effects_mismatch' });
+      }
+      settleTotal.inc({ network, result: 'success' }); recordDuration(startTime, network);
+      return res.json({ success: true, payer: auth.from, transaction: outcome.hash, network });
+    }
+
+    // Standard x402 Exact EVM settlement, Permit2 method (EIP-3009 is handled above).
     // The canonical proxy enforces witness.to, so the facilitator cannot alter
     // the recipient or amount after the payer has signed.
     {

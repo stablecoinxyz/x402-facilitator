@@ -114,10 +114,15 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       const { v2, v1 } = kindsFor(response.body, 'eip155:8453', 'base');
 
       if (v2.length > 0) {
-        // SBC + USDC under each version
-        expect(v2).toHaveLength(2);
+        // SBC + USDC, each under EIP-3009 and Permit2. The EIP-3009 name/version
+        // are the token's on-chain EIP-712 domain (read 2026-11-12).
+        expect(v2.map((k: any) => k.extra)).toEqual([
+          { assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1' },
+          { assetTransferMethod: 'eip3009', name: 'USD Coin', version: '2' },
+          { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' },
+          { assetTransferMethod: 'permit2', name: 'USD Coin', version: '2' },
+        ]);
         expect(v1).toHaveLength(0);
-        expect(v2[0].extra.assetTransferMethod).toBe('permit2');
       }
     });
 
@@ -126,7 +131,13 @@ describe('GET /supported - x402 V2 Spec Compliance', () => {
       const { v2, v1 } = kindsFor(response.body, 'eip155:84532', 'base-sepolia');
 
       if (v2.length > 0) {
-        expect(v2).toHaveLength(2);
+        // Base Sepolia SBC has no EIP-3009, so only USDC (on-chain name "USDC") gets an eip3009 kind.
+        // Base Sepolia USDC's on-chain EIP-712 name is "USDC" (read 2026-11-12); it used to be advertised as "USD Coin".
+        expect(v2.map((k: any) => k.extra)).toEqual([
+          { assetTransferMethod: 'eip3009', name: 'USDC', version: '2' },
+          { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' },
+          { assetTransferMethod: 'permit2', name: 'USDC', version: '2' },
+        ]);
         expect(v1).toHaveLength(0);
       }
     });

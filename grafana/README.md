@@ -130,11 +130,12 @@ That is normal and does not mean logs are being discarded.
 | Result | Meaning | Severity |
 |--------|---------|----------|
 | `success` | Settlement completed on-chain | OK |
-| `failed` | Known bad input (malformed or non-Permit2 payload, unsupported network, unconfigured asset, or a self-payment where payer equals recipient) | Expected |
+| `failed` | Known bad input (malformed payload, an already-used EIP-3009 authorization (`invalid_exact_evm_nonce_already_used`), unsupported network, unconfigured asset, or a self-payment where payer equals recipient) | Expected |
 | `settlement_pending` | Broadcast succeeded but the receipt could not be read. Carries the tx hash — reconcile on chain. Pages (money may have moved) | Investigate |
 | `settlement_disabled` | Neither `ENABLE_REAL_SETTLEMENT` nor `ALLOW_SIMULATED_SETTLEMENT` is set — a misconfigured deploy refusing every settle. Pages | Investigate |
 | `settlement_proxy_unavailable` | The canonical x402 Permit2 proxy has no deployed bytecode on the target chain — a misconfigured chain refusing every Permit2 settle before broadcast. Pages | Investigate |
 | `settlement_asset_unavailable` | A facilitator-configured token address has no deployed bytecode on the target chain — a misconfigured chain refusing every settle for that asset before broadcast (client still sees `unsupported_asset`). Pages | Investigate |
+| `settlement_effects_mismatch` | EIP-3009 transfer mined and succeeded, but its receipt lacks `Transfer(from, payTo, amount)` from the token. Carries the tx hash. Should page (money moved in a way we did not sign off on) — pages via "Settle faults on our side" (added to the live rule 2026-11-12 07:22 UTC) | Investigate |
 | `sui_durability_unavailable` | The Sui settlement ledger (Redis via `REDIS_URL`) is unset or unreachable — real Sui settlement refuses every payment before submit. Pages | Investigate |
 | `expired` | Legacy label. No live path emits it — an expired EVM Permit2 authorization is rejected and counted under `failed` (`invalid_exact_evm_payload_authorization_valid_before`). Only the removed ERC-2612 EVM settle path set this label | Legacy |
 | `replay` | Nonce already settled (duplicate request). Emitted on Solana and simulated EVM only; live EVM Permit2 relies on the on-chain Permit2 nonce | Expected |
@@ -200,7 +201,7 @@ Re-import `dashboard.json` — Grafana detects matching UID and offers to overwr
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
 | Facilitator unreachable | Critical | `/metrics` unreachable (`up < 1`) for 5min |
-| Settle faults on our side | Critical | 2+ facilitator-fault settle results (`rpc_error`/`receipt_timeout`/`settlement_pending`/`nonce_conflict`/`gas_error`/`insufficient_allowance`/`tx_reverted`/`unknown`/`settlement_disabled`/`settlement_proxy_unavailable`/`settlement_asset_unavailable`/`sui_durability_unavailable`) in 15min |
+| Settle faults on our side | Critical | 2+ facilitator-fault settle results (`rpc_error`/`receipt_timeout`/`settlement_pending`/`nonce_conflict`/`gas_error`/`insufficient_allowance`/`tx_reverted`/`unknown`/`settlement_disabled`/`settlement_proxy_unavailable`/`settlement_asset_unavailable`/`sui_durability_unavailable`/`settlement_effects_mismatch`) in 15min |
 | Verify faults on our side | Critical | 3+ facilitator-fault verify results (`rpc_error`/`rpc_reverted`/`unknown`) in 15min |
 | Facilitator restart loop | Warning | 4+ process restarts in 30min |
 | Nonce conflicts detected | Warning | Any `nonce_conflict` settle in 15min |

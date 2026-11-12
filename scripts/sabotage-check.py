@@ -30,6 +30,48 @@ os.chdir(ROOT)
 # (name, file, find, replace, jest args)
 MUTATIONS = [
     (
+        "EIP-3009 recipient not bound to payTo",
+        "src/evm/eip3009.ts",
+        "if (!isAddress(requirements?.payTo) || !sameAddress(auth.to, requirements.payTo)) return",
+        "if (!isAddress(requirements?.payTo)) return",
+        ["src/__tests__/eip3009.spec.ts"],
+    ),
+    (
+        "EIP-3009 value not bound to the exact amount",
+        "src/evm/eip3009.ts",
+        "BigInt(auth.value) !== BigInt(requirements.amount)",
+        "BigInt(auth.value) < BigInt(requirements.amount)",
+        ["src/__tests__/eip3009.spec.ts"],
+    ),
+    (
+        "EIP-3009 high-s signature accepted (Radius broadcasts it unsimulated and pays gas)",
+        "src/evm/eip3009.ts",
+        " > SECP256K1_HALF_N) return",
+        " > SECP256K1_HALF_N && false) return",
+        ["src/__tests__/eip3009.spec.ts"],
+    ),
+    (
+        "absent assetTransferMethod no longer selects EIP-3009 (spec default)",
+        "src/evm/eip3009.ts",
+        "return method === undefined || method === 'eip3009';",
+        "return method === 'eip3009';",
+        ["src/__tests__/eip3009.spec.ts", "src/__tests__/eip3009-settle.spec.ts"],
+    ),
+    (
+        "EIP-3009 settle re-broadcasts when the nonce was consumed while queued",
+        "src/routes/settle.ts",
+        "        if (used) return { used: true };\n",
+        "",
+        ["src/__tests__/eip3009-settle.spec.ts"],
+    ),
+    (
+        "EIP-3009 success answered without the signed Transfer in the receipt",
+        "src/routes/settle.ts",
+        "      if (!outcome.transferSeen) {",
+        "      if ((false as boolean)) {",
+        ["src/__tests__/eip3009-settle.spec.ts"],
+    ),
+    (
         "Solana settle skips signature verification",
         "src/routes/settle.ts",
         "const verification = await verifySolanaPayment(paymentPayload.payload, paymentRequirements, log);",

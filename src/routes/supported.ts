@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network, getSuiNetworks, isSuiExactEnabled } from '../config';
+import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, toV1Network, resolveToken, getSuiNetworks, isSuiExactEnabled } from '../config';
 import { CASPER_MAINNET_CAIP2, CASPER_TESTNET_CAIP2 } from '../casper/networks';
 
 /**
@@ -23,6 +23,18 @@ export function getSupportedNetworks(req: Request, res: Response) {
   // v2 advertises CAIP-2; v1 advertises the plain name, because that is what a v1
   // client will send back in paymentRequirements.network. Advertising CAIP-2 on a
   // v1 kind gives the client an identifier its own spec doesn't allow it to use.
+  // EVM kinds for a configured token. name/version come from the token config —
+  // they are the token's on-chain EIP-712 domain (EIP-3009 signatures and the
+  // eip2612GasSponsoring permit are signed against it), so they must match chain.
+  function addEip3009Kind(network: string, chainId: number, asset: string) {
+    const token = resolveToken(chainId, asset);
+    if (token?.eip3009) addKind(network, { assetTransferMethod: 'eip3009', name: token.name, version: token.version }, false);
+  }
+  function addPermit2Kind(network: string, chainId: number, asset: string) {
+    const token = resolveToken(chainId, asset);
+    if (token) addKind(network, { assetTransferMethod: 'permit2', name: token.name, version: token.version }, false);
+  }
+
   function addKind(network: string, extra: Record<string, unknown>, includeV1 = true) {
     kinds.push({ x402Version: 2, scheme: 'exact', network, extra });
     const v1Name = toV1Network(network);
@@ -33,27 +45,32 @@ export function getSupportedNetworks(req: Request, res: Response) {
 
   // Add Base Mainnet if configured
   if (config.baseFacilitatorAddress && config.baseFacilitatorPrivateKey) {
-    addKind('eip155:8453', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
-    addKind('eip155:8453', { assetTransferMethod: 'permit2', name: 'USD Coin', version: '2' }, false);
+    addEip3009Kind('eip155:8453', config.baseChainId, config.baseSbcTokenAddress);
+    addEip3009Kind('eip155:8453', config.baseChainId, config.baseUsdcTokenAddress);
+    addPermit2Kind('eip155:8453', config.baseChainId, config.baseSbcTokenAddress);
+    addPermit2Kind('eip155:8453', config.baseChainId, config.baseUsdcTokenAddress);
     addSigner(signers, 'eip155:*', config.baseFacilitatorAddress);
   }
 
   // Add Base Sepolia if configured
   if (config.baseSepoliaFacilitatorAddress && config.baseSepoliaFacilitatorPrivateKey) {
-    addKind('eip155:84532', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
-    addKind('eip155:84532', { assetTransferMethod: 'permit2', name: 'USD Coin', version: '2' }, false);
+    addEip3009Kind('eip155:84532', config.baseSepoliaChainId, config.baseSepoliaUsdcTokenAddress);
+    addPermit2Kind('eip155:84532', config.baseSepoliaChainId, config.baseSepoliaSbcTokenAddress);
+    addPermit2Kind('eip155:84532', config.baseSepoliaChainId, config.baseSepoliaUsdcTokenAddress);
     addSigner(signers, 'eip155:*', config.baseSepoliaFacilitatorAddress);
   }
 
   // Add Radius Mainnet if configured
   if (config.radiusFacilitatorAddress && config.radiusFacilitatorPrivateKey) {
-    addKind('eip155:723487', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
+    addEip3009Kind('eip155:723487', config.radiusChainId, config.radiusSbcTokenAddress);
+    addPermit2Kind('eip155:723487', config.radiusChainId, config.radiusSbcTokenAddress);
     addSigner(signers, 'eip155:*', config.radiusFacilitatorAddress);
   }
 
   // Add Radius Testnet if configured
   if (config.radiusTestnetFacilitatorAddress && config.radiusTestnetFacilitatorPrivateKey) {
-    addKind('eip155:72344', { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' }, false);
+    addEip3009Kind('eip155:72344', config.radiusTestnetChainId, config.radiusTestnetSbcTokenAddress);
+    addPermit2Kind('eip155:72344', config.radiusTestnetChainId, config.radiusTestnetSbcTokenAddress);
     addSigner(signers, 'eip155:*', config.radiusTestnetFacilitatorAddress);
   }
 
