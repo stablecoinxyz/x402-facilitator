@@ -39,6 +39,9 @@ export function selectsEip3009(requirements: any): boolean {
   return method === undefined || method === 'eip3009';
 }
 
+/** secp256k1 n / 2. Signatures with s above this are malleable and rejected by the tokens. */
+const SECP256K1_HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
+
 /**
  * Strictly decode an EIP-3009 payload and bind it to the requirements.
  * `minRemainingSeconds` is how long the authorization must still be valid:
@@ -57,6 +60,10 @@ export function parseEip3009(
   if (!auth || typeof auth !== 'object') return { ok: false, reason: 'invalid_payload', payer };
   // EOA signatures only (65 bytes). ERC-1271 / ERC-6492 smart-wallet signatures are out of scope.
   if (!isSignature(payload?.signature)) return { ok: false, reason: 'invalid_exact_evm_payload_signature', payer };
+  // ecrecover accepts both s and n - s, so viem's verifyTypedData passes a high-s signature,
+  // but the token contracts reject it on chain. Radius settles without a simulation, so a
+  // high-s payload would be broadcast, revert, and burn the facilitator's gas.
+  if (BigInt(`0x${payload.signature.slice(66, 130)}`) > SECP256K1_HALF_N) return { ok: false, reason: 'invalid_exact_evm_payload_signature', payer };
   if (!isAddress(auth.from) || !isAddress(auth.to) || !isUint(auth.value) || !isUint(auth.validAfter) || !isUint(auth.validBefore) || typeof auth.nonce !== 'string' || !bytes32.test(auth.nonce)) return { ok: false, reason: 'invalid_payload', payer };
   if (!isAddress(requirements?.payTo) || !sameAddress(auth.to, requirements.payTo)) return { ok: false, reason: 'invalid_exact_evm_payload_recipient_mismatch', payer };
   if (!isUint(requirements?.amount) || BigInt(auth.value) !== BigInt(requirements.amount)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_value_mismatch', payer };

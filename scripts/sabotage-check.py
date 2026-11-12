@@ -44,6 +44,13 @@ MUTATIONS = [
         ["src/__tests__/eip3009.spec.ts"],
     ),
     (
+        "EIP-3009 high-s signature accepted (Radius broadcasts it unsimulated and pays gas)",
+        "src/evm/eip3009.ts",
+        " > SECP256K1_HALF_N) return",
+        " > SECP256K1_HALF_N && false) return",
+        ["src/__tests__/eip3009.spec.ts"],
+    ),
+    (
         "absent assetTransferMethod no longer selects EIP-3009 (spec default)",
         "src/evm/eip3009.ts",
         "return method === undefined || method === 'eip3009';",

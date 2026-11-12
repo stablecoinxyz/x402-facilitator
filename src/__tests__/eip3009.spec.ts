@@ -56,6 +56,18 @@ describe('EIP-3009 payload binding', () => {
 });
 
 describe('EIP-3009 signature', () => {
+  it('refuses the high-s twin of a valid signature, which ecrecover accepts but the tokens revert on', async () => {
+    const a = auth();
+    const low = await sign(a);
+    const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+    const highS = (N - BigInt(`0x${low.slice(66, 130)}`)).toString(16).padStart(64, '0');
+    const v = parseInt(low.slice(130), 16) === 27 ? '1c' : '1b';
+    const high = `${low.slice(0, 66)}${highS}${v}`;
+    // The gap being closed: off-chain recovery alone accepts the twin.
+    expect(await verifyEip3009Signature(a, high, sbc, BASE)).toBe(true);
+    expect(parseEip3009({ signature: low, authorization: a }, requirements(), NOW, 0n).ok).toBe(true);
+    expect(parseEip3009({ signature: high, authorization: a }, requirements(), NOW, 0n)).toMatchObject({ ok: false, reason: 'invalid_exact_evm_payload_signature' });
+  });
   it('verifies against the configured token domain', async () => {
     const a = auth();
     expect(await verifyEip3009Signature(a, await sign(a), sbc, BASE)).toBe(true);
