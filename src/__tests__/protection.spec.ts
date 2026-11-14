@@ -13,7 +13,7 @@ import { settlePayment } from '../routes/settle';
 import { verifyPayment } from '../routes/verify';
 import { NonceTracker } from '../protection/nonce-tracker';
 import { createRateLimiter } from '../protection/rate-limiter';
-import { createSizeLimiter } from '../protection/size-limiter';
+import { createSizeLimiter, bodyErrorHandler } from '../protection/size-limiter';
 import {
   createBasePayment,
   createSolanaPayment,
@@ -370,13 +370,8 @@ describe('Input Size Limiting', () => {
 
     const app = express();
     app.use(createSizeLimiter('1kb'));
-    app.use((err: any, req: any, res: any, next: any) => {
-      if (err.type === 'entity.too.large') {
-        return res.status(413).json({ error: 'payload_too_large' });
-      }
-      next(err);
-    });
     app.post('/test', (req, res) => res.json({ ok: true }));
+    app.use(bodyErrorHandler);
 
     const largePayload = { data: 'x'.repeat(2000) };
     const response = await request(app)
@@ -385,6 +380,39 @@ describe('Input Size Limiting', () => {
       .send(JSON.stringify(largePayload));
 
     expect(response.status).toBe(413);
+    expect(response.body).toEqual({ error: 'payload_too_large' });
+  });
+
+  describe('bodyErrorHandler never answers with a stack trace', () => {
+    function appWith(route: express.RequestHandler = (req, res) => res.json({ ok: true })) {
+      const app = express();
+      app.use(createSizeLimiter('100kb'));
+      app.post('/test', route);
+      app.use(bodyErrorHandler);
+      return app;
+    }
+
+    it('answers malformed JSON with 400 JSON, not the HTML stack page', async () => {
+      const response = await request(appWith()).post('/test').set('Content-Type', 'application/json').send('{bad');
+      expect(response.status).toBe(400);
+      expect(response.headers['content-type']).toMatch(/application\/json/);
+      expect(response.body).toEqual({ error: 'invalid_request_body', type: 'entity.parse.failed' });
+      expect(response.text).not.toMatch(/SyntaxError|node_modules|at /);
+    });
+
+    it('answers an unsupported content-encoding with 415 JSON', async () => {
+      const response = await request(appWith()).post('/test').set('Content-Type', 'application/json').set('Content-Encoding', 'br-nope').send('{}');
+      expect(response.status).toBe(415);
+      expect(response.body).toEqual({ error: 'invalid_request_body', type: 'encoding.unsupported' });
+    });
+
+    it('answers an error thrown by a route with a fixed 500 code and no message', async () => {
+      const app = appWith(() => { throw new Error('secret detail https://rpc.example/KEY'); });
+      const response = await request(app).post('/test').set('Content-Type', 'application/json').send('{}');
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: 'internal_error' });
+      expect(response.text).not.toMatch(/secret detail|rpc\.example/);
+    });
   });
 
   it('should allow exactly at the limit', async () => {

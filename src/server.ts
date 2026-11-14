@@ -6,7 +6,7 @@ import { requestIdMiddleware } from './middleware/requestId';
 import { config, getSuiGrpcUrl, getSuiNetworks, isSuiExactEnabled } from './config';
 import { getSuiSettlementLedger } from './sui/settlement-ledger';
 import { createRateLimiter } from './protection/rate-limiter';
-import { createSizeLimiter } from './protection/size-limiter';
+import { createSizeLimiter, bodyErrorHandler } from './protection/size-limiter';
 import { verifyPayment } from './routes/verify';
 import { settlePayment, resolveSettlementMode } from './routes/settle';
 import { getSupportedNetworks } from './routes/supported';
@@ -23,14 +23,6 @@ app.use(requestIdMiddleware);
 // Rate limiting: 60 requests per minute per IP on payment endpoints
 const paymentRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 
-// Payload too large error handler
-app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (err.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'payload_too_large' });
-  }
-  next(err);
-});
-
 // Metrics endpoint (internal)
 app.get('/metrics', metricsHandler);
 
@@ -44,6 +36,9 @@ app.get('/health', healthCheck);
 app.get('/supported', getSupportedNetworks);
 app.post('/verify', paymentRateLimiter, verifyPayment);
 app.post('/settle', paymentRateLimiter, settlePayment);
+
+// Last: body read/parse errors and anything a route throws → JSON, never a stack trace
+app.use(bodyErrorHandler);
 
 // Start server — try config.port, then increment until an available port is found
 function startServer(port: number) {
