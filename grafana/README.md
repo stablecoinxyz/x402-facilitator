@@ -130,15 +130,15 @@ That is normal and does not mean logs are being discarded.
 | Result | Meaning | Severity |
 |--------|---------|----------|
 | `success` | Settlement completed on-chain | OK |
-| `failed` | Known bad input (malformed payload, an already-used EIP-3009 authorization (`invalid_exact_evm_nonce_already_used`), unsupported network, unconfigured asset, or a self-payment where payer equals recipient) | Expected |
-| `settlement_pending` | Broadcast succeeded but the receipt could not be read. Carries the tx hash — reconcile on chain. Pages (money may have moved) | Investigate |
+| `failed` | Known bad input (malformed payload, an already-used EIP-3009 authorization (`invalid_exact_evm_nonce_already_used`) or Permit2 nonce (`permit2_invalid_nonce`, read from the Permit2 bitmap; it used to surface as `tx_reverted` and page), unsupported network, unconfigured asset, or a self-payment where payer equals recipient) | Expected |
+| `settlement_pending` | Broadcast succeeded but the receipt could not be read. Carries the tx hash — reconcile on chain. Pages (money may have moved). EVM: the hash is kept for 5 minutes so the merchant's retry reconciles (see `replay`). Also counts `errorReason: settlement_unconfirmed` — broadcast, unconfirmed, and the pending record could not be written | Investigate |
 | `settlement_disabled` | Neither `ENABLE_REAL_SETTLEMENT` nor `ALLOW_SIMULATED_SETTLEMENT` is set — a misconfigured deploy refusing every settle. Pages | Investigate |
 | `settlement_proxy_unavailable` | The canonical x402 Permit2 proxy has no deployed bytecode on the target chain — a misconfigured chain refusing every Permit2 settle before broadcast. Pages | Investigate |
 | `settlement_asset_unavailable` | A facilitator-configured token address has no deployed bytecode on the target chain — a misconfigured chain refusing every settle for that asset before broadcast (client still sees `unsupported_asset`). Pages | Investigate |
 | `settlement_effects_mismatch` | EIP-3009 transfer mined and succeeded, but its receipt lacks `Transfer(from, payTo, amount)` from the token. Carries the tx hash. Should page (money moved in a way we did not sign off on) — pages via "Settle faults on our side" (added to the live rule 2026-11-12 07:22 UTC) | Investigate |
 | `sui_durability_unavailable` | The Sui settlement ledger (Redis via `REDIS_URL`) is unset or unreachable — real Sui settlement refuses every payment before submit. Pages | Investigate |
 | `expired` | Legacy label. No live path emits it — an expired EVM Permit2 authorization is rejected and counted under `failed` (`invalid_exact_evm_payload_authorization_valid_before`). Only the removed ERC-2612 EVM settle path set this label | Legacy |
-| `replay` | Nonce already settled (duplicate request). Emitted on Solana and simulated EVM only; live EVM Permit2 relies on the on-chain Permit2 nonce | Expected |
+| `replay` | Nonce already settled (duplicate request) on Solana and simulated EVM. **Live EVM (Permit2 and EIP-3009): a retry reconciled against OUR pending transaction** — it answered `success: true` with the original hash after an earlier `settlement_pending`; nothing new was broadcast | Expected |
 | `duplicate_settlement` | Sui: these signed bytes were already settled (by another request, or the chain already holds them). Carries the digest. The replay guard working | Expected |
 | `bad_request` | Missing paymentPayload | Client error |
 | `insufficient_allowance` | Token allowance insufficient at transfer time | Investigate |

@@ -43,6 +43,17 @@ export function selectsEip3009(requirements: any): boolean {
 const SECP256K1_HALF_N = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
 
 /**
+ * `/settle` runs this itself, after its pending-settlement lookup (it parses with
+ * `checkTimeWindow: false`): a retry of a payment we already broadcast must
+ * reconcile even if the authorization expired while it waited.
+ */
+export function checkEip3009TimeWindow(auth: Pick<Eip3009Authorization, 'validAfter' | 'validBefore'>, nowSeconds: bigint, minRemainingSeconds: bigint): { ok: true } | { ok: false; reason: string } {
+  if (nowSeconds < BigInt(auth.validAfter)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_after' };
+  if (BigInt(auth.validBefore) - nowSeconds < minRemainingSeconds) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_before' };
+  return { ok: true };
+}
+
+/**
  * Strictly decode an EIP-3009 payload and bind it to the requirements.
  * `minRemainingSeconds` is how long the authorization must still be valid:
  * a settle needs headroom for the transaction to be mined before `validBefore`.
@@ -52,6 +63,7 @@ export function parseEip3009(
   requirements: any,
   nowSeconds: bigint,
   minRemainingSeconds: bigint,
+  opts: { checkTimeWindow?: boolean } = {},
 ): { ok: true; auth: Eip3009Authorization; signature: string } | { ok: false; reason: string; payer: string } {
   const auth = payload?.authorization;
   const payer = typeof auth?.from === 'string' ? auth.from : 'unknown';
@@ -68,8 +80,10 @@ export function parseEip3009(
   if (!isAddress(requirements?.payTo) || !sameAddress(auth.to, requirements.payTo)) return { ok: false, reason: 'invalid_exact_evm_payload_recipient_mismatch', payer };
   if (!isUint(requirements?.amount) || BigInt(auth.value) !== BigInt(requirements.amount)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_value_mismatch', payer };
   if (sameAddress(auth.from, auth.to)) return { ok: false, reason: 'invalid_self_payment', payer };
-  if (nowSeconds < BigInt(auth.validAfter)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_after', payer };
-  if (BigInt(auth.validBefore) - nowSeconds < minRemainingSeconds) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_before', payer };
+  if (opts.checkTimeWindow !== false) {
+    const window = checkEip3009TimeWindow(auth, nowSeconds, minRemainingSeconds);
+    if (!window.ok) return { ok: false, reason: window.reason, payer };
+  }
   return { ok: true, auth: { from: auth.from, to: auth.to, value: auth.value, validAfter: auth.validAfter, validBefore: auth.validBefore, nonce: auth.nonce }, signature: payload.signature };
 }
 

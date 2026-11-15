@@ -5,18 +5,21 @@ import { createBasePayment, createPaymentRequirements } from './fixtures/payment
 import { proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
 import { settleTotal } from '../lib/metrics';
 import { config } from '../config';
+import { InMemoryPendingSettlementStore, setPendingSettlementStore } from '../protection/pending-settlement-store';
 
 const simulateContract = jest.fn();
 const writeContract = jest.fn();
 const waitForTransactionReceipt = jest.fn();
 const getCode = jest.fn();
+const readContract = jest.fn();
+const getTransaction = jest.fn();
 
 jest.mock('viem', () => {
   const actual = jest.requireActual('viem');
   return {
     ...actual,
     verifyTypedData: jest.fn().mockResolvedValue(true),
-    createPublicClient: () => ({ getCode, simulateContract, waitForTransactionReceipt }),
+    createPublicClient: () => ({ getCode, simulateContract, waitForTransactionReceipt, readContract, getTransaction }),
     createWalletClient: () => ({ writeContract }),
   };
 });
@@ -42,6 +45,9 @@ describe('Permit2 proxy settlement', () => {
     writeContract.mockReset().mockResolvedValue(HASH);
     waitForTransactionReceipt.mockReset().mockResolvedValue({ status: 'success' });
     getCode.mockReset().mockResolvedValue('0x01');
+    readContract.mockReset().mockResolvedValue(0n); // Permit2 nonceBitmap: nonce unused
+    getTransaction.mockReset();
+    setPendingSettlementStore(new InMemoryPendingSettlementStore());
   });
   afterAll(() => { if (previous === undefined) delete process.env.ENABLE_REAL_SETTLEMENT; else process.env.ENABLE_REAL_SETTLEMENT = previous; });
 

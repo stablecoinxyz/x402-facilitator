@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { createWalletClient, createPublicClient, http } from 'viem';
+import { createWalletClient, createPublicClient, http, encodeFunctionData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Logger } from 'pino';
 import { config, getSolanaSvmNetwork, isSolanaSvmExactEnabled, resolveToken, toCaip2Network, isSuiExactEnabled, isSuiNetworkServed } from '../config';
@@ -17,9 +17,11 @@ import { settlementQueue } from '../lib/settlement-queue';
 import { parseAmount } from '../lib/amount';
 import { resolveEvmFacilitatorAddress } from './verify';
 import logger from '../lib/logger';
-import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, proxyAbi, X402_PERMIT2_PROXY } from '../evm/permit2';
-import { selectsEip3009, eip3009Abi, transferWithAuthorizationArgs, EIP3009_NONCE_ALREADY_USED } from '../evm/eip3009';
-import { checkEip3009Offline, checkEip3009Chain, receiptHasTransfer } from '../evm/eip3009-check';
+import { parsePermit2, verifyPermit2Signature, verifySponsorSignature, proxyAbi, X402_PERMIT2_PROXY, PERMIT2_ADDRESS, checkPermit2TimeWindow, permit2NonceBitmapAbi, permit2NonceWord, permit2NonceUsed } from '../evm/permit2';
+import { selectsEip3009, eip3009Abi, transferWithAuthorizationArgs, EIP3009_NONCE_ALREADY_USED, checkEip3009TimeWindow } from '../evm/eip3009';
+import { checkEip3009Offline, checkEip3009Chain, receiptHasTransfer, eip3009Client } from '../evm/eip3009-check';
+import { pendingSettlements, pendingSettlementKey, PENDING_SETTLEMENT_TTL_MS } from '../protection/pending-settlement-store';
+import { reconcilePending, recordPendingAndThrow, pendingError, revertedError } from '../evm/pending-reconcile';
 
 /**
  * An EIP-3009 authorization must stay valid this long for /settle to broadcast it.
@@ -759,26 +761,31 @@ export async function settlePayment(req: Request, res: Response) {
         recordDuration(startTime, network);
         return res.json({ success: false, payer: r.payer, transaction: '', network, errorReason: r.reason });
       };
-      const offline = await checkEip3009Offline(paymentPayload, paymentRequirements, networkConfig, EIP3009_SETTLE_MARGIN_SECONDS);
+      // The time window is checked below, after the pending-settlement lookup.
+      const offline = await checkEip3009Offline(paymentPayload, paymentRequirements, networkConfig, EIP3009_SETTLE_MARGIN_SECONDS, { checkTimeWindow: false });
       if (!offline.ok) return refuse(offline);
+      const { auth, signature, token } = offline;
+      const windowRefusal = () => {
+        const window = checkEip3009TimeWindow(auth, BigInt(Math.floor(Date.now() / 1000)), EIP3009_SETTLE_MARGIN_SECONDS);
+        return window.ok ? null : { reason: window.reason, payer: auth.from, metric: 'invalid' };
+      };
       // Mode is decided before any RPC, as on the Permit2 path: disabled and
       // simulated settlement never touch the chain.
       const mode = resolveSettlementMode();
       if (mode === 'disabled') {
         settleTotal.inc({ network, result: 'settlement_disabled' }); recordDuration(startTime, network);
-        return res.json({ success: false, payer: offline.auth.from, transaction: '', network, errorReason: 'settlement_disabled' });
+        return res.json({ success: false, payer: auth.from, transaction: '', network, errorReason: 'settlement_disabled' });
       }
       if (mode === 'simulated') {
-        const previous = nonceTracker.getSettled(network, offline.auth.from, offline.auth.nonce);
+        const late = windowRefusal();
+        if (late) return refuse(late);
+        const previous = nonceTracker.getSettled(network, auth.from, auth.nonce);
         res.set('X-Settlement-Mode', 'simulated');
         if (previous?.simulated) return res.json({ success: true, payer: previous.payer, transaction: previous.txHash, network: previous.network });
         const txHash = `SIMULATED${Math.random().toString(36).slice(2)}${Date.now()}`;
-        nonceTracker.markSettled(network, offline.auth.from, offline.auth.nonce, { txHash, payer: offline.auth.from, network, simulated: true });
-        return res.json({ success: true, payer: offline.auth.from, transaction: txHash, network });
+        nonceTracker.markSettled(network, auth.from, auth.nonce, { txHash, payer: auth.from, network, simulated: true });
+        return res.json({ success: true, payer: auth.from, transaction: txHash, network });
       }
-      const checked = await checkEip3009Chain(offline, networkConfig, log);
-      if (!checked.ok) return refuse(checked);
-      const { auth, signature, token, client } = checked;
       if (!networkConfig.privateKey) throw new Error(`Facilitator private key not configured for ${networkConfig.label}`);
       const chain = { id: networkConfig.chainId, name: networkConfig.label, nativeCurrency: { decimals: 18, name: 'Native', symbol: 'NATIVE' }, rpcUrls: { default: { http: [networkConfig.rpcUrl] } } };
       const account = privateKeyToAccount(networkConfig.privateKey as `0x${string}`);
@@ -786,27 +793,59 @@ export async function settlePayment(req: Request, res: Response) {
       const isRadius = networkConfig.chainId === config.radiusChainId || networkConfig.chainId === config.radiusTestnetChainId;
       const tokenAddress = token.address as `0x${string}`;
       const args = transferWithAuthorizationArgs(auth, signature) as any;
-      const outcome = await settlementQueue.enqueue(account.address, async (): Promise<{ used: true } | { used: false; hash: `0x${string}`; transferSeen: boolean }> => {
+      const calldata = encodeFunctionData({ abi: eip3009Abi, functionName: 'transferWithAuthorization', args });
+      const pendingKey = pendingSettlementKey(networkConfig.chainId, tokenAddress, calldata);
+      const store = pendingSettlements();
+      // A payment this process broadcast has already used its nonce and moved the
+      // payer's balance, so the usual pre-queue refusals would answer its retry
+      // "failed". A record skips them; whether this is a hit is decided by the
+      // read inside the queue, never by this one.
+      const peeked = await store.get(pendingKey);
+      let client;
+      if (peeked) client = eip3009Client(networkConfig);
+      else {
+        const late = windowRefusal();
+        if (late) return refuse(late);
+        const checked = await checkEip3009Chain(offline, networkConfig, log);
+        if (!checked.ok) return refuse(checked);
+        client = checked.client;
+      }
+      type Outcome = { kind: 'refused'; refusal: { reason: string; payer: string; metric: string } } | { kind: 'used' } | { kind: 'settled'; hash: `0x${string}`; transferSeen: boolean; reconciled: boolean };
+      const outcome = await settlementQueue.enqueue(account.address, async (): Promise<Outcome> => {
+        // Retry of a payment we broadcast: reconcile against OUR transaction, never broadcast.
+        const record = await store.get(pendingKey);
+        if (record) {
+          await store.delete(pendingKey);
+          const r = await reconcilePending(client, record.hash, { to: tokenAddress, from: account.address, input: calldata }, log);
+          if (r.kind === 'mined') return { kind: 'settled', hash: record.hash, transferSeen: receiptHasTransfer(r.receipt.logs, tokenAddress, auth), reconciled: true };
+          if (r.kind === 'reverted') throw revertedError(record.hash);
+          if (r.kind === 'pending') { await store.set(pendingKey, record); throw pendingError(record.hash); }
+          // 'mismatch': the stored transaction is not this request's broadcast → a miss.
+        }
+        if (peeked) {
+          // The record was gone by the time this request reached the queue, so
+          // the checks skipped above run now.
+          const late = windowRefusal();
+          if (late) return { kind: 'refused', refusal: late };
+          const checked = await checkEip3009Chain(offline, networkConfig, log);
+          if (!checked.ok) return { kind: 'refused', refusal: checked };
+        }
         // Inside the queue: a concurrent duplicate waits here until the first one
         // is mined, then finds the nonce used instead of broadcasting a revert.
         const used = await client.readContract({ address: tokenAddress, abi: eip3009Abi, functionName: 'authorizationState', args: [auth.from as `0x${string}`, auth.nonce as `0x${string}`] });
-        if (used) return { used: true };
+        if (used) return { kind: 'used' };
         if (!isRadius) await client.simulateContract({ account: account.address, address: tokenAddress, abi: eip3009Abi, functionName: 'transferWithAuthorization', args });
         const gasOverrides: { gasPrice?: bigint } = {};
         if (isRadius) gasOverrides.gasPrice = (await client.getGasPrice()) + 1000000000n;
         const hash = await wallet.writeContract({ address: tokenAddress, abi: eip3009Abi, functionName: 'transferWithAuthorization', args, ...gasOverrides });
         let receipt;
         try { receipt = await client.waitForTransactionReceipt({ hash, confirmations: 1 }); }
-        catch (error: any) { error.broadcastHash = hash; error.settlementPending = true; throw error; }
-        if (receipt.status === 'reverted') {
-          const err: any = new Error('EIP-3009 settlement reverted');
-          err.broadcastHash = hash;
-          err.transactionReverted = true;
-          throw err;
-        }
-        return { used: false, hash, transferSeen: receiptHasTransfer(receipt.logs, tokenAddress, auth) };
+        catch (error: any) { return recordPendingAndThrow(pendingKey, hash, error, PENDING_SETTLEMENT_TTL_MS, log); }
+        if (receipt.status === 'reverted') throw revertedError(hash);
+        return { kind: 'settled', hash, transferSeen: receiptHasTransfer(receipt.logs, tokenAddress, auth), reconciled: false };
       });
-      if (outcome.used) {
+      if (outcome.kind === 'refused') return refuse(outcome.refusal);
+      if (outcome.kind === 'used') {
         settleTotal.inc({ network, result: 'failed' }); recordDuration(startTime, network);
         return res.json({ success: false, payer: auth.from, transaction: '', network, errorReason: EIP3009_NONCE_ALREADY_USED });
       }
@@ -817,7 +856,8 @@ export async function settlePayment(req: Request, res: Response) {
         settleTotal.inc({ network, result: 'settlement_effects_mismatch' }); recordDuration(startTime, network);
         return res.json({ success: false, payer: auth.from, transaction: outcome.hash, network, errorReason: 'settlement_effects_mismatch' });
       }
-      settleTotal.inc({ network, result: 'success' }); recordDuration(startTime, network);
+      if (outcome.reconciled) log.info({ network, payer: auth.from, txHash: outcome.hash }, 'EIP-3009 retry reconciled against our pending transaction');
+      settleTotal.inc({ network, result: outcome.reconciled ? 'replay' : 'success' }); recordDuration(startTime, network);
       return res.json({ success: true, payer: auth.from, transaction: outcome.hash, network });
     }
 
@@ -829,7 +869,8 @@ export async function settlePayment(req: Request, res: Response) {
       settleTotal.inc({ network, result: 'failed' });
       return res.json({ success: false, payer: 'unknown', transaction: '', network, errorReason: 'invalid_payload' });
     }
-    const parsedPermit2 = parsePermit2(paymentPayload.payload, paymentRequirements, paymentPayload.extensions);
+    // The time window is checked inside the queue, after the pending-settlement lookup.
+    const parsedPermit2 = parsePermit2(paymentPayload.payload, paymentRequirements, paymentPayload.extensions, { checkTimeWindow: false });
     if (!parsedPermit2.ok) {
       settleTotal.inc({ network, result: 'failed' });
       return res.json({ success: false, payer: parsedPermit2.payer, transaction: '', network, errorReason: parsedPermit2.reason });
@@ -850,6 +891,8 @@ export async function settlePayment(req: Request, res: Response) {
       if (!sponsorSignatureOk) { settleTotal.inc({ network, result: 'invalid_signature' }); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'invalid_exact_evm_payload_signature' }); }
     }
     if (permit2Mode === 'simulated') {
+      const window = checkPermit2TimeWindow(parsedPermit2.auth, BigInt(Math.floor(Date.now() / 1000)));
+      if (!window.ok) { settleTotal.inc({ network, result: 'failed' }); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: window.reason }); }
       const previous = nonceTracker.getSettled(network, parsedPermit2.auth.from, parsedPermit2.auth.nonce);
       if (previous?.simulated) {
         res.set('X-Settlement-Mode', 'simulated');
@@ -886,7 +929,32 @@ export async function settlePayment(req: Request, res: Response) {
     const witness = { to: parsedPermit2.auth.witness.to as `0x${string}`, validAfter: BigInt(parsedPermit2.auth.witness.validAfter) };
     const args: any = parsedPermit2.sponsor ? [{ value: BigInt(parsedPermit2.sponsor.amount), deadline: BigInt(parsedPermit2.sponsor.deadline), r: `0x${parsedPermit2.sponsor.signature.slice(2, 66)}`, s: `0x${parsedPermit2.sponsor.signature.slice(66, 130)}`, v: parseInt(parsedPermit2.sponsor.signature.slice(130), 16) }, permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`] : [permit, parsedPermit2.auth.from as `0x${string}`, witness, parsedPermit2.signature as `0x${string}`];
     const functionName: any = parsedPermit2.sponsor ? 'settleWithPermit' : 'settle';
-    const txHash = await settlementQueue.enqueue(account.address, async () => {
+    const calldata = encodeFunctionData({ abi: proxyAbi, functionName, args });
+    const pendingKey = pendingSettlementKey(networkConfig.chainId, X402_PERMIT2_PROXY, calldata);
+    const store = pendingSettlements();
+    const permitNonce = BigInt(parsedPermit2.auth.nonce);
+    type Outcome = { kind: 'refused'; reason: string } | { kind: 'used' } | { kind: 'settled'; hash: `0x${string}`; reconciled: boolean };
+    // Order inside the queue is part of the fix (spec §4): pending-record read →
+    // on a miss only: time window → Permit2 nonce bitmap → simulate → broadcast.
+    // Reading the bitmap first would fail every reconcilable retry, because our
+    // mined pending transaction has already set the bit.
+    const outcome = await settlementQueue.enqueue(account.address, async (): Promise<Outcome> => {
+      const record = await store.get(pendingKey);
+      if (record) {
+        await store.delete(pendingKey);
+        const r = await reconcilePending(publicClient as any, record.hash, { to: X402_PERMIT2_PROXY, from: account.address, input: calldata }, log);
+        if (r.kind === 'mined') return { kind: 'settled', hash: record.hash, reconciled: true };
+        if (r.kind === 'reverted') throw revertedError(record.hash);
+        if (r.kind === 'pending') { await store.set(pendingKey, record); throw pendingError(record.hash); }
+        // 'mismatch': the stored transaction is not this request's broadcast → a miss.
+      }
+      const window = checkPermit2TimeWindow(parsedPermit2.auth, BigInt(Math.floor(Date.now() / 1000)));
+      if (!window.ok) return { kind: 'refused', reason: window.reason };
+      // A direct read, never a match on viem's error text (it embeds call
+      // arguments). Also stops Radius, which skips simulation, from broadcasting
+      // a transaction that can only revert.
+      const bitmap = await publicClient.readContract({ address: PERMIT2_ADDRESS, abi: permit2NonceBitmapAbi, functionName: 'nonceBitmap', args: [parsedPermit2.auth.from as `0x${string}`, permit2NonceWord(permitNonce)] });
+      if (permit2NonceUsed(bitmap, permitNonce)) return { kind: 'used' };
       // Keep preflight and broadcast in one serialization boundary: otherwise
       // concurrent duplicates can all preflight before Permit2 consumes its nonce.
       if (!isRadius) await publicClient.simulateContract({ account: account.address, address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args });
@@ -895,17 +963,20 @@ export async function settlePayment(req: Request, res: Response) {
       const hash = await wallet.writeContract({ address: X402_PERMIT2_PROXY, abi: proxyAbi, functionName, args, ...gasOverrides });
       let receipt;
       try { receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 }); }
-      catch (error: any) { error.broadcastHash = hash; error.settlementPending = true; throw error; }
-      if (receipt.status === 'reverted') {
-        const err: any = new Error('Permit2 settlement reverted');
-        err.broadcastHash = hash;
-        err.transactionReverted = true;
-        throw err;
-      }
-      return hash;
+      catch (error: any) { return recordPendingAndThrow(pendingKey, hash, error, PENDING_SETTLEMENT_TTL_MS, log); }
+      if (receipt.status === 'reverted') throw revertedError(hash);
+      return { kind: 'settled', hash, reconciled: false };
     });
-    settleTotal.inc({ network, result: 'success' }); recordDuration(startTime, network);
-    return res.json({ success: true, payer: parsedPermit2.auth.from, transaction: txHash, network });
+    if (outcome.kind === 'refused') { settleTotal.inc({ network, result: 'failed' }); recordDuration(startTime, network); return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: outcome.reason }); }
+    if (outcome.kind === 'used') {
+      // No record of a broadcast of ours (restart, other machine, TTL, or after a
+      // confirmed success): a used nonce is never answered as success (spec §6).
+      settleTotal.inc({ network, result: 'failed' }); recordDuration(startTime, network);
+      return res.json({ success: false, payer: parsedPermit2.auth.from, transaction: '', network, errorReason: 'permit2_invalid_nonce' });
+    }
+    if (outcome.reconciled) log.info({ network, payer: parsedPermit2.auth.from, txHash: outcome.hash }, 'Permit2 retry reconciled against our pending transaction');
+    settleTotal.inc({ network, result: outcome.reconciled ? 'replay' : 'success' }); recordDuration(startTime, network);
+    return res.json({ success: true, payer: parsedPermit2.auth.from, transaction: outcome.hash, network });
     }
 
     log.debug({ network, label: networkConfig.label }, 'EVM settlement');
@@ -1399,6 +1470,16 @@ export async function settlePayment(req: Request, res: Response) {
     // The transfer was broadcast but its outcome could not be read. Per x402 v2 this
     // is NOT terminal and MUST carry the broadcast hash, so the caller reconciles on
     // chain instead of reading "failed" and signing a fresh permit — a second payment.
+    // Broadcast, unconfirmed, and the pending record could not be written. Still
+    // carries the hash, under a code upstream middleware does not retry: a retry
+    // with no record would broadcast again.
+    if (error?.pendingUnrecorded && error?.broadcastHash) {
+      log.error({ err: error, action: 'settle', network, payer, txHash: error.broadcastHash, errorReason: 'settlement_unconfirmed' }, 'Settlement broadcast, unconfirmed, and not recorded');
+      settleTotal.inc({ network, result: 'settlement_pending' });
+      recordDuration(startTime, network);
+      return res.status(200).json({ success: false, payer, transaction: error.broadcastHash, network, errorReason: 'settlement_unconfirmed' });
+    }
+
     if (error?.settlementPending && error?.broadcastHash) {
       log.error({ err: error, action: 'settle', network, payer, txHash: error.broadcastHash, errorReason: 'settlement_pending' }, 'Settlement broadcast but unconfirmed');
       settleTotal.inc({ network, result: 'settlement_pending' });

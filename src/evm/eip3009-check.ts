@@ -41,6 +41,7 @@ export async function checkEip3009Offline(
   paymentRequirements: any,
   networkConfig: EvmNetwork,
   minRemainingSeconds: bigint,
+  opts: { checkTimeWindow?: boolean } = {},
 ): Promise<Eip3009OfflineResult> {
   const fromField = paymentPayload?.payload?.authorization?.from;
   const payer = typeof fromField === 'string' ? fromField : 'unknown';
@@ -59,13 +60,20 @@ export async function checkEip3009Offline(
   if (!token) return { ok: false, reason: 'unsupported_asset', payer, metric: 'invalid' };
   if (!token.eip3009 || !selectsEip3009(paymentRequirements)) return { ok: false, reason: 'unsupported_asset_transfer_method', payer, metric: 'invalid' };
 
-  const parsed = parseEip3009(paymentPayload.payload, paymentRequirements, BigInt(Math.floor(Date.now() / 1000)), minRemainingSeconds);
+  const parsed = parseEip3009(paymentPayload.payload, paymentRequirements, BigInt(Math.floor(Date.now() / 1000)), minRemainingSeconds, opts);
   if (!parsed.ok) return { ok: false, reason: parsed.reason, payer: parsed.payer, metric: 'invalid' };
 
   let signatureOk = false;
   try { signatureOk = await verifyEip3009Signature(parsed.auth, parsed.signature, token, networkConfig.chainId); } catch { signatureOk = false; }
   if (!signatureOk) return { ok: false, reason: 'invalid_exact_evm_payload_signature', payer: parsed.auth.from, metric: 'invalid_signature' };
   return { ok: true, auth: parsed.auth, signature: parsed.signature, token };
+}
+
+export function eip3009Client(networkConfig: EvmNetwork): PublicClient {
+  return createPublicClient({
+    chain: { id: networkConfig.chainId, name: networkConfig.label, nativeCurrency: { decimals: 18, name: 'Native', symbol: 'NATIVE' }, rpcUrls: { default: { http: [networkConfig.rpcUrl] } } },
+    transport: http(networkConfig.rpcUrl),
+  }) as PublicClient;
 }
 
 /** Token bytecode, `authorizationState`, balance. */
@@ -76,10 +84,7 @@ export async function checkEip3009Chain(
 ): Promise<Eip3009CheckResult> {
   const { auth, token } = offline;
   const parsed = { auth, signature: offline.signature };
-  const client = createPublicClient({
-    chain: { id: networkConfig.chainId, name: networkConfig.label, nativeCurrency: { decimals: 18, name: 'Native', symbol: 'NATIVE' }, rpcUrls: { default: { http: [networkConfig.rpcUrl] } } },
-    transport: http(networkConfig.rpcUrl),
-  }) as PublicClient;
+  const client = eip3009Client(networkConfig);
 
   const code = await client.getCode({ address: token.address as `0x${string}` });
   if (!code || code === '0x') {

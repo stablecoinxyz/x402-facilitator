@@ -2,7 +2,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { CASPER_MAINNET_CAIP2, CASPER_TESTNET_CAIP2 } from './casper/networks';
 
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+// Never under Jest: tests must see the same configuration locally as in CI
+// (jest.config.js sets what they need), not the developer's real keys and RPC URLs.
+if (process.env.JEST_WORKER_ID === undefined) dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 export const config = {
   port: parseInt(process.env.FACILITATOR_PORT || '3001'),
