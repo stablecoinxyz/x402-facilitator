@@ -5,6 +5,7 @@ import { settlePayment } from '../routes/settle';
 import { verifyPayment } from '../routes/verify';
 import { config } from '../config';
 import { eip3009Abi } from '../evm/eip3009';
+import { InMemoryPendingSettlementStore, setPendingSettlementStore } from '../protection/pending-settlement-store';
 
 const readContract = jest.fn();
 const simulateContract = jest.fn();
@@ -77,6 +78,7 @@ describe('EIP-3009 /settle', () => {
     writeContract.mockReset().mockResolvedValue(HASH);
     waitForTransactionReceipt.mockReset().mockResolvedValue({ status: 'success', logs: [transferLog()] });
     chain(false);
+    setPendingSettlementStore(new InMemoryPendingSettlementStore());
   });
   afterAll(() => { if (previous === undefined) delete process.env.ENABLE_REAL_SETTLEMENT; else process.env.ENABLE_REAL_SETTLEMENT = previous; });
 

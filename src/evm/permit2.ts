@@ -51,7 +51,13 @@ export function isSignature(value: unknown): value is string { return typeof val
 export function sameAddress(a: unknown, b: string): boolean { return isAddress(a) && a.toLowerCase() === b.toLowerCase(); }
 
 /** Strictly decode and bind an official Exact EVM Permit2 payload to requirements. */
-export function parsePermit2(payload: any, requirements: any, extensions: any = {}): { ok: true; auth: Permit2Authorization; signature: string; sponsor?: Eip2612Sponsoring } | { ok: false; reason: string; payer: string } {
+/**
+ * `checkTimeWindow: false` is for `/settle` only, which runs
+ * `checkPermit2TimeWindow` itself AFTER its pending-settlement lookup: a retry of
+ * a payment we already broadcast must reconcile even if the permit expired
+ * while it waited.
+ */
+export function parsePermit2(payload: any, requirements: any, extensions: any = {}, opts: { checkTimeWindow?: boolean } = {}): { ok: true; auth: Permit2Authorization; signature: string; sponsor?: Eip2612Sponsoring } | { ok: false; reason: string; payer: string } {
   const auth = payload?.permit2Authorization;
   const payer = typeof auth?.from === 'string' ? auth.from : 'unknown';
   if (requirements?.extra?.assetTransferMethod !== 'permit2') return { ok: false, reason: 'unsupported_asset_transfer_method', payer };
@@ -62,15 +68,27 @@ export function parsePermit2(payload: any, requirements: any, extensions: any = 
   if (!sameAddress(auth.spender, X402_PERMIT2_PROXY)) return { ok: false, reason: 'invalid_exact_evm_payload_recipient_mismatch', payer };
   if (!sameAddress(auth.permitted.token, requirements.asset) || !sameAddress(auth.witness.to, requirements.payTo)) return { ok: false, reason: 'invalid_exact_evm_payload_recipient_mismatch', payer };
   if (BigInt(auth.permitted.amount) !== BigInt(requirements.amount)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_value_mismatch', payer };
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  if (now < BigInt(auth.witness.validAfter)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_after', payer };
-  if (now > BigInt(auth.deadline)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_before', payer };
+  if (opts.checkTimeWindow !== false) {
+    const window = checkPermit2TimeWindow(auth, BigInt(Math.floor(Date.now() / 1000)));
+    if (!window.ok) return { ok: false, reason: window.reason, payer };
+  }
   const sponsor = extensions?.eip2612GasSponsoring?.info;
   if (sponsor !== undefined) {
     if (!isAddress(sponsor?.from) || !isAddress(sponsor?.asset) || !isAddress(sponsor?.spender) || !isUint(sponsor?.amount) || !isUint(sponsor?.nonce) || !isUint(sponsor?.deadline) || !isSignature(sponsor?.signature) || sponsor?.version !== '1' || !sameAddress(sponsor.from, auth.from) || !sameAddress(sponsor.asset, auth.permitted.token) || !sameAddress(sponsor.spender, PERMIT2_ADDRESS) || BigInt(sponsor.amount) !== BigInt(auth.permitted.amount) || BigInt(sponsor.deadline) < BigInt(auth.deadline)) return { ok: false, reason: 'invalid_payload', payer };
   }
   return { ok: true, auth, signature: payload.signature, ...(sponsor ? { sponsor } : {}) };
 }
+
+export function checkPermit2TimeWindow(auth: Pick<Permit2Authorization, 'deadline' | 'witness'>, nowSeconds: bigint): { ok: true } | { ok: false; reason: string } {
+  if (nowSeconds < BigInt(auth.witness.validAfter)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_after' };
+  if (nowSeconds > BigInt(auth.deadline)) return { ok: false, reason: 'invalid_exact_evm_payload_authorization_valid_before' };
+  return { ok: true };
+}
+
+/** Permit2 unordered nonces: bit `nonce & 255` of word `nonce >> 8` (SignatureTransfer.sol `bitmapPositions`). */
+export const permit2NonceBitmapAbi = [{ type: 'function', name: 'nonceBitmap', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }, { name: 'wordPos', type: 'uint256' }], outputs: [{ name: '', type: 'uint256' }] }] as const;
+export function permit2NonceWord(nonce: bigint): bigint { return nonce >> 8n; }
+export function permit2NonceUsed(bitmap: bigint, nonce: bigint): boolean { return ((bitmap >> (nonce & 255n)) & 1n) === 1n; }
 
 export async function verifyPermit2Signature(auth: Permit2Authorization, signature: string, chainId: number): Promise<boolean> {
   return verifyTypedData({ address: auth.from as `0x${string}`, domain: { name: 'Permit2', chainId, verifyingContract: PERMIT2_ADDRESS }, types: permit2WitnessTypes, primaryType: 'PermitWitnessTransferFrom', message: auth as any, signature: signature as `0x${string}` });
